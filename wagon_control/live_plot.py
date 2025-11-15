@@ -14,6 +14,7 @@ import numpy as np
 from matplotlib.animation import FuncAnimation
 from matplotlib.colors import LinearSegmentedColormap
 
+from . import path
 from .visualization import parse_gps_data, parse_imu_data
 
 # Monumental brand colors (hex for plots)
@@ -102,6 +103,18 @@ class LivePlotter:
             markeredgewidth=1.0,
         )
 
+        # Pre-compute and plot reference path
+        ref_path = path.path_trajectory(t_max=20.0, dt=0.1)
+        (self.gps_reference,) = self.ax_gps.plot(
+            ref_path["x"],
+            ref_path["y"],
+            "--",
+            color=MONUMENTAL_YELLOW_ORANGE,
+            linewidth=2.0,
+            alpha=0.9,
+            label="Reference Path",
+        )
+
         (self.accel_x_line,) = self.ax_accel.plot(
             [], [], label="X", alpha=0.7, color=MONUMENTAL_ORANGE
         )
@@ -135,13 +148,13 @@ class LivePlotter:
             ax.yaxis.label.set_color(MONUMENTAL_CREAM)
             ax.title.set_color(MONUMENTAL_CREAM)
 
-        # GPS plot - fixed 4m x 4m viewing area
+        # GPS plot - viewing area adjusted for reference path
         self.ax_gps.set_xlabel("X Position (m)", fontsize=10)
         self.ax_gps.set_ylabel("Y Position (m)", fontsize=10)
         self.ax_gps.set_title("GPS Trajectory", fontsize=11, fontweight="bold")
         self.ax_gps.grid(True, alpha=0.2, color=MONUMENTAL_CREAM)
-        self.ax_gps.set_xlim(-4, 4)
-        self.ax_gps.set_ylim(-4, 4)
+        self.ax_gps.set_xlim(-2, 2)
+        self.ax_gps.set_ylim(-0.5, 4.5)
         self.ax_gps.set_aspect("equal")
         legend = self.ax_gps.legend(
             loc="upper right", facecolor=MONUMENTAL_DARK_BLUE, edgecolor=MONUMENTAL_CREAM

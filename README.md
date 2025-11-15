@@ -8,10 +8,11 @@ This project implements a simulated control system for a differential-drive wago
 
 ## Features
 
+- **Reference Path**: Lemniscate of Gerono path definition for path following challenges
 - **Inverse Kinematics**: Converts linear velocity (`v_cmd`) and angular velocity (`omega_cmd`) into wheel velocities using differential drive model (wheelbase = 0.5m)
 - **WebSocket Control**: Real-time communication with wagon server
 - **Sensor Data Collection**: IMU (accelerometer, gyroscope) and GPS data
-- **Live Visualization**: Real-time trajectory and sensor plots
+- **Live Visualization**: Real-time trajectory and sensor plots with reference path overlay
 
 ## Requirements
 
@@ -78,7 +79,7 @@ The main runner script `run.sh` handles the complete workflow. **By default, it 
 #### Live Visualization
 
 The default mode launches a real-time plot window that updates as data is collected:
-- **GPS Trajectory**: Shows the wagon's path with a color gradient indicating time progression
+- **GPS Trajectory**: Shows the wagon's path with a color gradient indicating time progression, overlaid with the reference path (dashed yellow-orange line)
 - **Accelerometer**: X and Y acceleration plotted over time
 - **Gyroscope**: Angular velocity plotted over time
 
@@ -117,6 +118,7 @@ The visualization tool generates:
 ```
 wagon_control/          # Main Python package
 ├── model.py           # Inverse kinematics and robot parameters
+├── path.py            # Reference path definition (Lemniscate of Gerono)
 ├── client.py          # WebSocket client and data collection
 ├── visualization.py   # Plotting utilities for sensor data
 ├── live_plot.py       # Real-time visualization

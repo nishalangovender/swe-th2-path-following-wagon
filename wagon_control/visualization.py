@@ -15,6 +15,8 @@ import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 
+from . import path
+
 # Monumental brand colors
 MONUMENTAL_ORANGE = "#f74823"
 MONUMENTAL_BLUE = "#2374f7"
@@ -159,7 +161,10 @@ def parse_gps_data(filepath: Path) -> Dict[str, np.ndarray]:
 
 
 def plot_gps_trajectory(
-    gps_data: Dict[str, np.ndarray], title: str = "GPS Trajectory", save_path: Optional[Path] = None
+    gps_data: Dict[str, np.ndarray],
+    title: str = "GPS Trajectory",
+    save_path: Optional[Path] = None,
+    show_reference: bool = True,
 ) -> Figure:
     """Plot GPS trajectory (x vs y position).
 
@@ -167,6 +172,7 @@ def plot_gps_trajectory(
         gps_data: Dictionary containing 'x', 'y', and 'timestamp' arrays.
         title: Plot title.
         save_path: Optional path to save the figure.
+        show_reference: If True, overlay the reference path on the plot.
 
     Returns:
         Matplotlib figure object.
@@ -235,12 +241,26 @@ def plot_gps_trajectory(
             markeredgewidth=1.0,
         )
 
+    # Plot reference path if requested
+    if show_reference:
+        ref_path = path.path_trajectory(t_max=20.0, dt=0.1)
+        ax.plot(
+            ref_path["x"],
+            ref_path["y"],
+            "--",
+            color=MONUMENTAL_YELLOW_ORANGE,
+            linewidth=2.0,
+            alpha=0.9,
+            label="Reference Path",
+            zorder=2,
+        )
+
     ax.set_xlabel("X Position (m)", color=MONUMENTAL_CREAM)
     ax.set_ylabel("Y Position (m)", color=MONUMENTAL_CREAM)
     ax.set_title(title, color=MONUMENTAL_CREAM)
     ax.grid(True, alpha=0.2, color=MONUMENTAL_CREAM)
-    ax.set_xlim(-4, 4)
-    ax.set_ylim(-4, 4)
+    ax.set_xlim(-2, 2)
+    ax.set_ylim(-0.5, 4.5)
     ax.set_aspect("equal")
 
     # Dark mode styling
