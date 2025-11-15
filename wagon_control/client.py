@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Optional, TextIO, Union
 
 import websockets
 
+from wagon_control.model import inverse_kinematics
+
 # Terminal color codes - Monumental branding
 TERM_ORANGE = "\033[38;2;247;72;35m"  # Monumental orange
 TERM_BLUE = "\033[38;2;35;116;247m"  # Complementary blue
@@ -78,8 +80,9 @@ def setup_logging(verbose: bool = False) -> None:
 
 # Configuration Constants
 WS_URI: str = "ws://91.99.103.188:8765"
-TEST_V_LEFT: float = 0.5
-TEST_V_RIGHT: float = 1.0
+# Test velocity commands (to be replaced by path follower)
+TEST_V_CMD: float = 0.5  # Linear velocity (m/s)
+TEST_OMEGA_CMD: float = 1.0  # Angular velocity (rad/s)
 RETRY_DELAY_SECONDS: int = 1
 MAX_RETRY_DELAY_SECONDS: int = 60
 WEBSOCKET_TIMEOUT_SECONDS: float = 5.0
@@ -323,10 +326,16 @@ class SensorDataCollector:
                     logging.info(f"{TERM_BLUE}✓ Connected to server{TERM_RESET}")
                     retry_delay = RETRY_DELAY_SECONDS  # Reset retry delay on successful connection
 
-                    # Send velocity command once after connection
-                    await self.send_velocity_command(
-                        websocket, v_left=TEST_V_LEFT, v_right=TEST_V_RIGHT
+                    # Compute wheel velocities using inverse kinematics
+                    v_left, v_right = inverse_kinematics(TEST_V_CMD, TEST_OMEGA_CMD)
+                    logging.info(
+                        f"Sending velocities: v_cmd={TEST_V_CMD} m/s, "
+                        f"omega_cmd={TEST_OMEGA_CMD} rad/s → "
+                        f"v_left={v_left:.3f} m/s, v_right={v_right:.3f} m/s"
                     )
+
+                    # Send velocity command once after connection
+                    await self.send_velocity_command(websocket, v_left=v_left, v_right=v_right)
 
                     while not self.should_stop:
                         try:

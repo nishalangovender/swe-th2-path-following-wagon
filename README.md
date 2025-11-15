@@ -6,6 +6,13 @@ A differential-drive wagon control system for path following using IMU and GPS s
 
 This project implements a simulated control system for a differential-drive wagon. The system connects to a websocket server, receives noisy sensor data (accelerometer, gyroscope, GPS), and aims to control the wagon to follow a specified path.
 
+## Features
+
+- **Inverse Kinematics**: Converts linear velocity (`v_cmd`) and angular velocity (`omega_cmd`) into wheel velocities using differential drive model (wheelbase = 0.5m)
+- **WebSocket Control**: Real-time communication with wagon server
+- **Sensor Data Collection**: IMU (accelerometer, gyroscope) and GPS data
+- **Live Visualization**: Real-time trajectory and sensor plots
+
 ## Requirements
 
 - Python 3.7+
@@ -109,12 +116,14 @@ The visualization tool generates:
 
 ```
 wagon_control/          # Main Python package
+├── model.py           # Inverse kinematics and robot parameters
 ├── client.py          # WebSocket client and data collection
 ├── visualization.py   # Plotting utilities for sensor data
 ├── live_plot.py       # Real-time visualization
 └── plot_results.py    # Post-processing visualization
 
 docs/                  # Documentation
+├── PLAN.md            # Development roadmap
 ├── ASSIGNMENT.md      # Assignment details
 └── images/            # Assignment diagrams
 
@@ -122,6 +131,37 @@ results/               # Collected run data (timestamped)
 └── run_YYYYMMDD_HHMMSS/
     ├── imu_data.csv
     └── gps_data.csv
+```
+
+## Testing
+
+### Quick Test
+
+```bash
+./run.sh
+```
+
+Expected output with current test parameters (`v_cmd=0.75 m/s`, `omega_cmd=0.5 rad/s`):
+- Console: `Sending velocities: v_cmd=0.75 m/s, omega_cmd=0.5 rad/s → v_left=0.625 m/s, v_right=0.875 m/s`
+- Trajectory: Curved path turning left (counter-clockwise)
+- Score: L2 distance metric after ~20 seconds
+
+### Testing Different Motions
+
+Edit `wagon_control/client.py` lines 84-85:
+
+```python
+# Straight motion
+TEST_V_CMD: float = 1.0
+TEST_OMEGA_CMD: float = 0.0
+
+# Sharp turn
+TEST_V_CMD: float = 0.5
+TEST_OMEGA_CMD: float = 1.0
+
+# Spin in place
+TEST_V_CMD: float = 0.0
+TEST_OMEGA_CMD: float = -1.0
 ```
 
 ## Development
