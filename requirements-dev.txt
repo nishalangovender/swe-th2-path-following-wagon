@@ -1,0 +1,11 @@
+# Development dependencies for code quality and type checking
+-r requirements.txt
+
+# Code formatting
+black>=23.0.0
+
+# Fast linting
+ruff>=0.1.0
+
+# Static type checking
+mypy>=1.0.0
