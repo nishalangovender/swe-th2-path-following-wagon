@@ -16,6 +16,13 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 
 from . import path
+from .diagnostic_plots import (
+    load_run_data,
+    plot_position_error,
+    plot_heading_comparison,
+    plot_velocity_comparison,
+    plot_xy_trajectory as plot_xy_trajectory_detailed
+)
 
 # Monumental brand colors
 MONUMENTAL_ORANGE = "#f74823"
@@ -378,6 +385,30 @@ def plot_run_summary(run_dir: Path, save_plots: bool = False, show_plots: bool =
     # Generate IMU plots
     imu_save_path = run_dir / "imu_data.png" if save_plots else None
     plot_imu_data(imu_data, title=f"IMU Data - {run_name}", save_path=imu_save_path)
+
+    # Generate diagnostic plots (if state and reference data available)
+    try:
+        data = load_run_data(run_dir)
+
+        # Position error plot
+        position_error_path = run_dir / "position_error.png" if save_plots else None
+        plot_position_error(data, position_error_path)
+
+        # Heading comparison plot
+        heading_path = run_dir / "heading_comparison.png" if save_plots else None
+        plot_heading_comparison(data, heading_path)
+
+        # Velocity comparison plot
+        velocity_path = run_dir / "velocity_comparison.png" if save_plots else None
+        plot_velocity_comparison(data, velocity_path)
+
+        # Detailed XY trajectory plot
+        xy_traj_path = run_dir / "xy_trajectory_detailed.png" if save_plots else None
+        plot_xy_trajectory_detailed(data, xy_traj_path)
+
+    except Exception as e:
+        print(f"Warning: Could not generate diagnostic plots: {e}")
+        print("  (state_data.csv and reference_data.csv may be missing)")
 
     # Output is handled by the calling script for consistent formatting
 
