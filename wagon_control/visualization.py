@@ -5,81 +5,26 @@ This module provides functions to load and visualize IMU (accelerometer, gyrosco
 and GPS sensor data collected from the wagon control system.
 """
 
-import csv
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 
 from . import path
-from .diagnostic_plots import (
-    load_run_data,
-    plot_position_error,
-    plot_heading_comparison,
-    plot_velocity_comparison,
-    plot_xy_trajectory as plot_xy_trajectory_detailed
+from .plot_styles import (
+    MONUMENTAL_BLUE,
+    MONUMENTAL_CMAP,
+    MONUMENTAL_CREAM,
+    MONUMENTAL_DARK_BLUE,
+    # Color scheme
+    MONUMENTAL_ORANGE,
+    MONUMENTAL_YELLOW_ORANGE,
+    # CSV loading utilities
+    load_csv_data,
+    parse_timestamp,
 )
-
-# Monumental brand colors
-MONUMENTAL_ORANGE = "#f74823"
-MONUMENTAL_BLUE = "#2374f7"
-MONUMENTAL_CREAM = "#fffdee"
-MONUMENTAL_TAUPE = "#686a5f"
-MONUMENTAL_YELLOW_ORANGE = "#ffa726"  # Yellow-orange (Atrium style)
-MONUMENTAL_DARK_BLUE = "#0d1b2a"  # Dark blue for background
-
-# Create custom colormap: orange -> blue
-MONUMENTAL_CMAP = LinearSegmentedColormap.from_list(
-    "monumental", [MONUMENTAL_ORANGE, MONUMENTAL_BLUE]
-)
-
-
-def parse_timestamp(timestamp_str: str) -> float:
-    """Parse ISO format timestamp string to seconds since epoch.
-
-    Args:
-        timestamp_str: ISO format timestamp string.
-
-    Returns:
-        Unix timestamp as float (seconds since epoch).
-
-    Raises:
-        ValueError: If timestamp cannot be parsed.
-    """
-    try:
-        # Try parsing as ISO format with timezone
-        dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-        return dt.timestamp()
-    except (ValueError, AttributeError):
-        # Try parsing as numeric timestamp
-        return float(timestamp_str)
-
-
-def load_csv_data(filepath: Path) -> Tuple[List[str], List[List[str]]]:
-    """Load CSV file and return headers and data rows.
-
-    Args:
-        filepath: Path to the CSV file.
-
-    Returns:
-        Tuple containing (headers, data_rows).
-
-    Raises:
-        FileNotFoundError: If the CSV file does not exist.
-    """
-    if not filepath.exists():
-        raise FileNotFoundError(f"CSV file not found: {filepath}")
-
-    with open(filepath, newline="") as f:
-        reader = csv.reader(f)
-        headers = next(reader)
-        data_rows = list(reader)
-
-    return headers, data_rows
 
 
 def parse_imu_data(filepath: Path) -> Dict[str, np.ndarray]:
@@ -370,45 +315,18 @@ def plot_run_summary(run_dir: Path, save_plots: bool = False, show_plots: bool =
         FileNotFoundError: If required CSV files are not found.
     """
     imu_path = run_dir / "imu_data.csv"
-    gps_path = run_dir / "gps_data.csv"
 
     # Load data
     imu_data = parse_imu_data(imu_path)
-    gps_data = parse_gps_data(gps_path)
 
     run_name = run_dir.name
 
-    # Generate GPS trajectory plot
-    gps_save_path = run_dir / "gps_trajectory.png" if save_plots else None
-    plot_gps_trajectory(gps_data, title=f"GPS Trajectory - {run_name}", save_path=gps_save_path)
-
-    # Generate IMU plots
+    # Generate IMU plots (raw sensor data not shown in live plot)
     imu_save_path = run_dir / "imu_data.png" if save_plots else None
     plot_imu_data(imu_data, title=f"IMU Data - {run_name}", save_path=imu_save_path)
 
-    # Generate diagnostic plots (if state and reference data available)
-    try:
-        data = load_run_data(run_dir)
-
-        # Position error plot
-        position_error_path = run_dir / "position_error.png" if save_plots else None
-        plot_position_error(data, position_error_path)
-
-        # Heading comparison plot
-        heading_path = run_dir / "heading_comparison.png" if save_plots else None
-        plot_heading_comparison(data, heading_path)
-
-        # Velocity comparison plot
-        velocity_path = run_dir / "velocity_comparison.png" if save_plots else None
-        plot_velocity_comparison(data, velocity_path)
-
-        # Detailed XY trajectory plot
-        xy_traj_path = run_dir / "xy_trajectory_detailed.png" if save_plots else None
-        plot_xy_trajectory_detailed(data, xy_traj_path)
-
-    except Exception as e:
-        print(f"Warning: Could not generate diagnostic plots: {e}")
-        print("  (state_data.csv and reference_data.csv may be missing)")
+    # Note: GPS trajectory, position error, heading comparison, and velocity plots
+    # are now consolidated into live_plot_snapshot.png for cleaner output
 
     # Output is handled by the calling script for consistent formatting
 

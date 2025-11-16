@@ -1,18 +1,32 @@
 # Wagon Path Following Control System
 
-A differential-drive wagon control system for path following using IMU and GPS sensor data.
+A sophisticated four-layer control system for autonomous path following of a differential-drive wagon using noisy sensor data.
 
 ## Overview
 
-This project implements a simulated control system for a differential-drive wagon. The system connects to a websocket server, receives noisy sensor data (accelerometer, gyroscope, GPS), and aims to control the wagon to follow a specified path.
+This project implements an **autonomous control system** for a differential-drive wagon that follows a Lemniscate of Gerono path. The system features a hierarchical four-layer architecture: **state estimation** (complementary filter), **path following** (Pure Pursuit), **motor control** (PI feedback), and **inverse kinematics**.
+
+The system processes noisy sensor data (GPS at 1 Hz, IMU at 20 Hz), fuses them for state estimation, and generates wheel velocity commands to achieve accurate path tracking with typical errors of 0.15-0.30m.
+
+## Architecture
+
+**Four-Layer Control Pipeline:**
+
+1. **State Estimation** (localizer.py) - Complementary filter fusing GPS and IMU with bias compensation
+2. **Path Following** (follower.py) - Pure Pursuit with adaptive lookahead distance
+3. **Motor Control** (motor_controller.py) - PI feedback for velocity tracking
+4. **Inverse Kinematics** (model.py) - Differential drive model (wheelbase = 0.5m)
+
+See [`docs/APPROACH.md`](docs/APPROACH.md) for detailed architecture explanation, design trade-offs, and generalization analysis.
 
 ## Features
 
-- **Reference Path**: Lemniscate of Gerono path definition for path following challenges
-- **Inverse Kinematics**: Converts linear velocity (`v_cmd`) and angular velocity (`omega_cmd`) into wheel velocities using differential drive model (wheelbase = 0.5m)
-- **WebSocket Control**: Real-time communication with wagon server
-- **Sensor Data Collection**: IMU (accelerometer, gyroscope) and GPS data
-- **Live Visualization**: Real-time trajectory and sensor plots with reference path overlay
+- **Autonomous Path Following**: Tracks Lemniscate of Gerono reference path for 20 seconds
+- **Sensor Fusion**: Complementary filter combines GPS (1 Hz) and IMU (20 Hz) with outlier rejection
+- **Adaptive Control**: Velocity-dependent lookahead and PI feedback for robust tracking
+- **Real-time Visualization**: Live trajectory plots with reference path overlay
+- **Diagnostic Analysis**: Post-run position/heading/velocity error analysis
+- **Centralized Configuration**: All control parameters documented in `config.py`
 
 ## Requirements
 
@@ -116,23 +130,33 @@ The visualization tool generates:
 ## Project Structure
 
 ```
-wagon_control/          # Main Python package
-├── model.py           # Inverse kinematics and robot parameters
-├── path.py            # Reference path definition (Lemniscate of Gerono)
-├── client.py          # WebSocket client and data collection
-├── visualization.py   # Plotting utilities for sensor data
-├── live_plot.py       # Real-time visualization
-└── plot_results.py    # Post-processing visualization
+wagon_control/              # Main Python package
+├── config.py              # Centralized configuration parameters
+├── model.py               # Inverse kinematics and robot parameters
+├── path.py                # Reference path definition (Lemniscate of Gerono)
+├── localizer.py           # State estimation (complementary filter)
+├── follower.py            # Path following (Pure Pursuit)
+├── motor_controller.py    # Velocity feedback control (PI)
+├── client.py              # WebSocket client and control loop
+├── data_collector.py      # CSV data logging
+├── plot_styles.py         # Shared visualization utilities
+├── visualization.py       # Post-run plotting (GPS, IMU)
+├── diagnostic_plots.py    # Performance analysis plots
+├── live_plot.py           # Real-time visualization
+└── plot_results.py        # CLI for visualization
 
-docs/                  # Documentation
-├── PLAN.md            # Development roadmap
-├── ASSIGNMENT.md      # Assignment details
-└── images/            # Assignment diagrams
+docs/                      # Documentation
+├── APPROACH.md            # System design and trade-offs
+├── ASSIGNMENT.md          # Original assignment details
+└── images/                # Architecture diagrams
 
-results/               # Collected run data (timestamped)
+results/                   # Collected run data (timestamped)
 └── run_YYYYMMDD_HHMMSS/
-    ├── imu_data.csv
-    └── gps_data.csv
+    ├── imu_data.csv       # IMU sensor data
+    ├── gps_data.csv       # GPS measurements
+    ├── state_data.csv     # Localized state estimates
+    ├── reference_data.csv # Reference trajectory
+    └── motor_data.csv     # Motor controller diagnostics
 ```
 
 ## Testing
@@ -143,28 +167,35 @@ results/               # Collected run data (timestamped)
 ./run.sh
 ```
 
-Expected output with current test parameters (`v_cmd=0.75 m/s`, `omega_cmd=0.5 rad/s`):
-- Console: `Sending velocities: v_cmd=0.75 m/s, omega_cmd=0.5 rad/s → v_left=0.625 m/s, v_right=0.875 m/s`
-- Trajectory: Curved path turning left (counter-clockwise)
-- Score: L2 distance metric after ~20 seconds
+Expected behavior:
+- System initializes from first GPS reading
+- Pure Pursuit controller follows Lemniscate of Gerono path
+- Runs for 20 seconds with real-time control updates
+- Score: L2 distance metric displayed at completion
+- Typical L2 error: 0.15-0.30m mean tracking error
 
-### Testing Different Motions
+### Configuration Tuning
 
-Edit `wagon_control/client.py` lines 84-85:
+All control parameters are centralized in `wagon_control/config.py`:
 
 ```python
-# Straight motion
-TEST_V_CMD: float = 1.0
-TEST_OMEGA_CMD: float = 0.0
+# Localization parameters
+LOCALIZER_VELOCITY_CORRECTION_GAIN = 0.45
+LOCALIZER_GYRO_BIAS = 0.015
+LOCALIZER_ACCEL_X_BIAS = 0.096
 
-# Sharp turn
-TEST_V_CMD: float = 0.5
-TEST_OMEGA_CMD: float = 1.0
+# Path following parameters
+FOLLOWER_BASE_LOOKAHEAD = 0.8
+FOLLOWER_LOOKAHEAD_TIME = 0.7
 
-# Spin in place
-TEST_V_CMD: float = 0.0
-TEST_OMEGA_CMD: float = -1.0
+# Motor controller gains
+MOTOR_KP_V = 0.5
+MOTOR_KI_V = 0.08
+MOTOR_KP_OMEGA = 0.5
+MOTOR_KI_OMEGA = 0.06
 ```
+
+See `config.py` for detailed parameter documentation and tuning rationale.
 
 ## Development
 

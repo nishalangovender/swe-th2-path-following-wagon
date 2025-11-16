@@ -1,0 +1,279 @@
+"""Configuration parameters for wagon control system.
+
+This module centralizes all configuration parameters including:
+- Physical robot parameters
+- Control system gains
+- Sensor fusion parameters
+- Visualization settings
+- WebSocket connection parameters
+
+All parameters are documented with their purpose, valid ranges, and tuning rationale.
+"""
+
+# ============================================================================
+# Physical Robot Parameters
+# ============================================================================
+
+WHEELBASE = 0.5
+"""Distance between left and right wheels (meters).
+Fixed by robot hardware design."""
+
+# Velocity constraints (actuator limits)
+V_MIN = -2.0
+"""Minimum wheel velocity (m/s). Hardware limit."""
+
+V_MAX = 2.0
+"""Maximum wheel velocity (m/s). Hardware limit."""
+
+# Acceleration constraints (actuator limits)
+A_MIN = -1.0
+"""Minimum wheel acceleration (m/s²). Hardware limit."""
+
+A_MAX = 1.0
+"""Maximum wheel acceleration (m/s²). Hardware limit."""
+
+
+# ============================================================================
+# Localization Parameters (Complementary Filter)
+# ============================================================================
+
+# Velocity correction gain (GPS fusion)
+LOCALIZER_VELOCITY_CORRECTION_GAIN = 0.45
+"""Gain for velocity correction when GPS arrives (range: [0, 1]).
+
+Higher values = more aggressive correction of drift.
+Lower values = smoother transitions but more accumulated error.
+
+Tuning rationale:
+- Reduced from initial 0.65 to 0.45 based on analysis showing GPS spikes
+- 0.45 provides good balance: corrects drift without overcorrecting to noisy GPS
+- Prevents velocity jumps that destabilize the controller
+"""
+
+# Velocity filtering
+LOCALIZER_VELOCITY_FILTER_ALPHA = 0.3
+"""Low-pass filter alpha for velocity smoothing (range: [0, 1]).
+
+Exponential moving average: v_filtered = alpha * v_new + (1-alpha) * v_old
+
+Higher alpha = faster response but more noise
+Lower alpha = smoother but slower response
+
+Tuning rationale:
+- 0.3 (30% new, 70% old) provides good noise rejection
+- Smooths accelerometer integration errors
+- Maintains responsiveness for feedback control
+"""
+
+# IMU bias compensation
+LOCALIZER_GYRO_BIAS = 0.015
+"""Gyroscope bias compensation (rad/s).
+
+Origin: Estimated from stationary phase analysis
+- Observed -16.68° drift over 20 seconds with zero input
+- Drift rate = -16.68° / 20s = -0.835°/s = -0.0146 rad/s
+- Rounded to 0.015 rad/s for positive compensation
+"""
+
+LOCALIZER_ACCEL_X_BIAS = 0.096
+"""Accelerometer X-axis (forward) bias (m/s²).
+
+Origin: Measured from stationary phase before movement
+- Stationary wagon should read 0 m/s² in X direction
+- Observed consistent positive offset of ~0.096 m/s²
+- This bias causes velocity drift if not compensated
+"""
+
+# GPS outlier rejection
+LOCALIZER_GPS_OUTLIER_THRESHOLD = 5.0
+"""GPS outlier rejection threshold (meters).
+
+Reject GPS updates that are more than this distance from predicted position.
+Protects against multipath errors, atmospheric interference, and GPS glitches.
+
+Tuning rationale:
+- 5m threshold is conservative (allows legitimate position jumps)
+- Rejects obvious outliers (>5m jumps are physically impossible at 2 m/s)
+"""
+
+
+# ============================================================================
+# Path Following Parameters (Pure Pursuit)
+# ============================================================================
+
+# Lookahead distance parameters
+FOLLOWER_BASE_LOOKAHEAD = 0.8
+"""Base lookahead distance for pure pursuit (meters).
+
+Distance ahead on path to target when adaptive lookahead is disabled.
+
+Tuning rationale:
+- 0.8m provides good preview without overshooting curves
+- Too small (<0.5m) = oscillations and unstable tracking
+- Too large (>1.5m) = cuts corners, poor path following
+"""
+
+FOLLOWER_LOOKAHEAD_TIME = 0.7
+"""Time-based lookahead gain for adaptive mode (seconds).
+
+Lookahead distance = FOLLOWER_LOOKAHEAD_TIME * |v| + FOLLOWER_LOOKAHEAD_OFFSET
+
+Tuning rationale:
+- 0.7s gives adequate preview without overshooting
+- Reduced from 0.8s to improve corner tracking
+- Provides velocity-proportional lookahead: faster → look further ahead
+"""
+
+FOLLOWER_LOOKAHEAD_OFFSET = 0.3
+"""Minimum base lookahead offset (meters).
+
+Ensures minimum lookahead even at zero velocity.
+
+Tuning rationale:
+- 0.3m minimum prevents excessive oscillation at low speeds
+- Small enough to track tight curves accurately
+"""
+
+FOLLOWER_MIN_LOOKAHEAD = 0.5
+"""Minimum adaptive lookahead distance (meters).
+
+Safety bound for adaptive lookahead calculation.
+
+Tuning rationale:
+- 0.5m is minimum for stable pure pursuit control
+- Below this, controller becomes too reactive and oscillates
+"""
+
+FOLLOWER_MAX_LOOKAHEAD = 2.0
+"""Maximum adaptive lookahead distance (meters).
+
+Safety bound for adaptive lookahead calculation.
+
+Tuning rationale:
+- 2.0m prevents looking too far ahead on curved paths
+- Keeps control responsive to path changes
+"""
+
+
+# ============================================================================
+# Motor Controller Parameters (PI Feedback)
+# ============================================================================
+
+# Proportional gains
+MOTOR_KP_V = 0.5
+"""Proportional gain for linear velocity feedback (range: [0, 2]).
+
+Higher = more aggressive velocity correction.
+
+Tuning rationale:
+- 0.5 provides moderate correction without overshoot
+- Conservative to prioritize stability over fast convergence
+- Analysis showed aggressive gains (>1.0) caused oscillations
+"""
+
+MOTOR_KP_OMEGA = 0.5
+"""Proportional gain for angular velocity feedback (range: [0, 2]).
+
+Higher = more aggressive heading correction.
+
+Tuning rationale:
+- 0.5 matches linear velocity gain for balanced control
+- Prevents coupling between linear and angular control loops
+"""
+
+# Integral gains
+MOTOR_KI_V = 0.08
+"""Integral gain for linear velocity (range: [0, 0.5]).
+
+Eliminates steady-state velocity tracking error.
+
+Tuning rationale:
+- 0.08 is conservative to prevent integral windup
+- Reduced from initial 0.1 after observing windup during stops
+- Low integral gain prioritizes stability
+"""
+
+MOTOR_KI_OMEGA = 0.06
+"""Integral gain for angular velocity (range: [0, 0.5]).
+
+Eliminates steady-state heading tracking error.
+
+Tuning rationale:
+- 0.06 is slightly lower than linear to prevent heading oscillations
+- Conservative to avoid windup during tight turns
+"""
+
+# Anti-windup limit
+MOTOR_INTEGRAL_LIMIT = 0.5
+"""Anti-windup limit for integral terms (meters/second or radians/second).
+
+Clamps integral accumulation to prevent large overshoots.
+
+Tuning rationale:
+- 0.5 limit prevents excessive integral buildup
+- Allows reasonable correction without destabilizing control
+"""
+
+
+# ============================================================================
+# Visualization Colors (Monumental Branding)
+# ============================================================================
+
+# Brand colors (hex codes for matplotlib)
+MONUMENTAL_ORANGE = "#f74823"
+"""Primary brand color - used for main data, measurements, actual trajectory."""
+
+MONUMENTAL_BLUE = "#2374f7"
+"""Secondary brand color - used for reference, predictions, ideal paths."""
+
+MONUMENTAL_CREAM = "#fffdee"
+"""Light color for text and labels on dark backgrounds."""
+
+MONUMENTAL_TAUPE = "#686a5f"
+"""Neutral color for guides, grids, and secondary elements."""
+
+MONUMENTAL_YELLOW_ORANGE = "#ffa726"
+"""Accent color (Atrium style) for highlights and warnings."""
+
+MONUMENTAL_DARK_BLUE = "#0d1b2a"
+"""Dark background color for live plots and dark mode displays."""
+
+# Terminal color codes (ANSI escape sequences)
+TERM_ORANGE = "\033[38;2;247;72;35m"
+"""Terminal color code for Monumental orange (RGB: 247, 72, 35)."""
+
+TERM_BLUE = "\033[38;2;35;116;247m"
+"""Terminal color code for complementary blue (RGB: 35, 116, 247)."""
+
+TERM_RESET = "\033[0m"
+"""Terminal color reset code."""
+
+
+# ============================================================================
+# WebSocket Configuration
+# ============================================================================
+
+WS_URI = "ws://91.99.103.188:8765"
+"""WebSocket server URI for wagon simulation."""
+
+WS_RETRY_DELAY_SECONDS = 1
+"""Initial retry delay for failed WebSocket connections (seconds)."""
+
+WS_MAX_RETRY_DELAY_SECONDS = 60
+"""Maximum retry delay with exponential backoff (seconds)."""
+
+WS_TIMEOUT_SECONDS = 5.0
+"""Timeout for WebSocket message reception (seconds)."""
+
+
+# ============================================================================
+# Path Planning Configuration
+# ============================================================================
+
+PATH_DURATION = 20.0
+"""Total duration for reference path trajectory (seconds).
+Must match assignment requirement (20-second Lemniscate)."""
+
+PATH_DT = 0.1
+"""Time step for path discretization (seconds).
+Results in 200 waypoints for 20-second trajectory."""

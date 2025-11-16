@@ -51,7 +51,7 @@ class WagonLocalizer:
         # Accelerometer X-axis bias (from stationary phase analysis: 0.0958 m/s²)
         self.accel_x_bias: float = 0.096  # m/s²
 
-    def update_gps(self, x: float, y: float, timestamp: float = None) -> None:
+    def update_gps(self, x: float, y: float, timestamp: Optional[float] = None) -> None:
         """Update position estimate from GPS measurement and correct velocity drift.
 
         Uses complementary filter approach:
@@ -72,7 +72,9 @@ class WagonLocalizer:
 
         if innovation_magnitude > 5.0:  # Threshold: 5 meters
             # Reject likely GPS outlier (multipath, atmospheric error, etc.)
-            print(f"GPS outlier rejected: {innovation_magnitude:.2f}m deviation from predicted position")
+            print(
+                f"GPS outlier rejected: {innovation_magnitude:.2f}m deviation from predicted position"
+            )
             return  # Skip this GPS update
 
         # Compute position error for velocity correction
@@ -150,11 +152,11 @@ class WagonLocalizer:
                 - v_y: Velocity y-component in global frame (m/s, filtered)
         """
         return {
-            'x': self.x,
-            'y': self.y,
-            'theta': self.theta,
-            'v_x': self.v_x_filtered,  # Return filtered velocity for feedback control
-            'v_y': self.v_y_filtered   # Return filtered velocity for feedback control
+            "x": self.x,
+            "y": self.y,
+            "theta": self.theta,
+            "v_x": self.v_x_filtered,  # Return filtered velocity for feedback control
+            "v_y": self.v_y_filtered,  # Return filtered velocity for feedback control
         }
 
     def reset(self) -> None:

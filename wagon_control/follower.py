@@ -7,7 +7,8 @@ This module implements a pure pursuit path following algorithm that:
 """
 
 import math
-from typing import List, Tuple
+from typing import Optional, Tuple
+
 import numpy as np
 
 
@@ -18,12 +19,15 @@ class PurePursuitFollower:
     to follow a time-parameterized reference trajectory.
     """
 
-    def __init__(self, lookahead_distance: float = 0.7,
-                 adaptive: bool = True,
-                 lookahead_time: float = 0.8,
-                 lookahead_offset: float = 0.3,
-                 min_lookahead: float = 0.5,
-                 max_lookahead: float = 2.0):
+    def __init__(
+        self,
+        lookahead_distance: float = 0.7,
+        adaptive: bool = True,
+        lookahead_time: float = 0.8,
+        lookahead_offset: float = 0.3,
+        min_lookahead: float = 0.5,
+        max_lookahead: float = 2.0,
+    ):
         """Initialize the pure pursuit controller.
 
         Args:
@@ -43,7 +47,7 @@ class PurePursuitFollower:
         self.min_lookahead = min_lookahead
         self.max_lookahead = max_lookahead
         self.lookahead_distance = lookahead_distance  # Will be updated if adaptive
-        self.start_time = None  # Start time for trajectory following
+        self.start_time: Optional[float] = None  # Start time for trajectory following
 
     def compute_adaptive_lookahead(self, velocity: float) -> float:
         """Compute velocity-adaptive lookahead distance.
@@ -68,8 +72,9 @@ class PurePursuitFollower:
 
         return lookahead
 
-    def find_closest_point(self, current_x: float, current_y: float,
-                          path_x: np.ndarray, path_y: np.ndarray) -> int:
+    def find_closest_point(
+        self, current_x: float, current_y: float, path_x: np.ndarray, path_y: np.ndarray
+    ) -> int:
         """Find index of closest point on path to current position.
 
         Args:
@@ -81,12 +86,17 @@ class PurePursuitFollower:
         Returns:
             Index of closest point on path
         """
-        distances = np.sqrt((path_x - current_x)**2 + (path_y - current_y)**2)
+        distances = np.sqrt((path_x - current_x) ** 2 + (path_y - current_y) ** 2)
         return int(np.argmin(distances))
 
-    def find_lookahead_point(self, current_x: float, current_y: float,
-                            path_x: np.ndarray, path_y: np.ndarray,
-                            start_idx: int) -> Tuple[float, float, int]:
+    def find_lookahead_point(
+        self,
+        current_x: float,
+        current_y: float,
+        path_x: np.ndarray,
+        path_y: np.ndarray,
+        start_idx: int,
+    ) -> Tuple[float, float, int]:
         """Find lookahead point on path at target distance ahead.
 
         Args:
@@ -130,8 +140,9 @@ class PurePursuitFollower:
         idx = int(np.argmin(np.abs(path_t - target_time)))
         return idx
 
-    def compute_reference_velocity(self, path_x: np.ndarray, path_y: np.ndarray,
-                                   path_t: np.ndarray, ref_idx: int) -> float:
+    def compute_reference_velocity(
+        self, path_x: np.ndarray, path_y: np.ndarray, path_t: np.ndarray, ref_idx: int
+    ) -> float:
         """Compute reference velocity from path time derivatives.
 
         Args:
@@ -156,12 +167,18 @@ class PurePursuitFollower:
         if dt > 0:
             v_ref = math.sqrt(dx**2 + dy**2) / dt
             # Clamp to reasonable bounds (inverse kinematics limits)
-            return min(v_ref, 2.0)
+            return float(min(v_ref, 2.0))
         else:
             return 0.0
 
-    def compute_control(self, state: dict, path_x: np.ndarray, path_y: np.ndarray,
-                       path_t: np.ndarray, current_time: float) -> Tuple[float, float]:
+    def compute_control(
+        self,
+        state: dict,
+        path_x: np.ndarray,
+        path_y: np.ndarray,
+        path_t: np.ndarray,
+        current_time: float,
+    ) -> Tuple[float, float]:
         """Compute velocity commands using pure pursuit algorithm.
 
         Args:
@@ -180,9 +197,9 @@ class PurePursuitFollower:
                 omega_cmd: Angular velocity command (rad/s)
         """
         # Extract state components
-        current_x = state['x']
-        current_y = state['y']
-        current_theta = state['theta']
+        current_x = state["x"]
+        current_y = state["y"]
+        current_theta = state["theta"]
 
         # Initialize start time on first call
         if self.start_time is None:
@@ -206,8 +223,7 @@ class PurePursuitFollower:
         )
 
         # Compute angle to lookahead point in global frame
-        angle_to_goal = math.atan2(lookahead_y - current_y,
-                                   lookahead_x - current_x)
+        angle_to_goal = math.atan2(lookahead_y - current_y, lookahead_x - current_x)
 
         # Compute angle error (alpha) relative to robot heading
         alpha = angle_to_goal - current_theta
@@ -216,8 +232,7 @@ class PurePursuitFollower:
 
         # Pure pursuit: compute curvature to lookahead point
         # actual distance to lookahead point (may differ from target)
-        actual_distance = math.sqrt((lookahead_x - current_x)**2 +
-                                   (lookahead_y - current_y)**2)
+        actual_distance = math.sqrt((lookahead_x - current_x) ** 2 + (lookahead_y - current_y) ** 2)
 
         if actual_distance > 0.01:  # Avoid division by zero
             # Curvature formula: kappa = 2*sin(alpha)/L

@@ -28,8 +28,9 @@ class MotorController:
         k_i_omega: Integral gain for angular velocity (default: 0.1)
     """
 
-    def __init__(self, k_v: float = 0.5, k_omega: float = 0.5,
-                 k_i_v: float = 0.1, k_i_omega: float = 0.1):
+    def __init__(
+        self, k_v: float = 0.5, k_omega: float = 0.5, k_i_v: float = 0.1, k_i_omega: float = 0.1
+    ):
         """Initialize the motor controller.
 
         Args:
@@ -61,9 +62,7 @@ class MotorController:
         # Anti-windup limits
         self.integral_limit: float = 0.5  # Clamp integral at ±0.5
 
-    def transform_velocity_to_body_frame(
-        self, v_x: float, v_y: float, theta: float
-    ) -> float:
+    def transform_velocity_to_body_frame(self, v_x: float, v_y: float, theta: float) -> float:
         """Transform global frame velocities to body frame forward velocity.
 
         Args:
@@ -106,7 +105,9 @@ class MotorController:
 
         # Apply anti-windup: clamp integral terms
         self.integral_v = max(-self.integral_limit, min(self.integral_limit, self.integral_v))
-        self.integral_omega = max(-self.integral_limit, min(self.integral_limit, self.integral_omega))
+        self.integral_omega = max(
+            -self.integral_limit, min(self.integral_limit, self.integral_omega)
+        )
 
         # PI control law: P term + I term
         v_cmd = v_ref + self.k_v * v_err + self.k_i_v * self.integral_v
@@ -124,8 +125,13 @@ class MotorController:
         self.integral_omega = 0.0
 
     def get_diagnostics(
-        self, v_ref: float, omega_ref: float, v_loc: float, omega_loc: float,
-        v_cmd: float, omega_cmd: float
+        self,
+        v_ref: float,
+        omega_ref: float,
+        v_loc: float,
+        omega_loc: float,
+        v_cmd: float,
+        omega_cmd: float,
     ) -> Dict[str, float]:
         """Get diagnostic information for logging and debugging.
 
@@ -144,14 +150,14 @@ class MotorController:
         omega_err = omega_ref - omega_loc
 
         return {
-            'v_ref': v_ref,
-            'omega_ref': omega_ref,
-            'v_loc': v_loc,
-            'omega_loc': omega_loc,
-            'v_err': v_err,
-            'omega_err': omega_err,
-            'v_cmd': v_cmd,
-            'omega_cmd': omega_cmd,
-            'integral_v': self.integral_v,
-            'integral_omega': self.integral_omega,
+            "v_ref": v_ref,
+            "omega_ref": omega_ref,
+            "v_loc": v_loc,
+            "omega_loc": omega_loc,
+            "v_err": v_err,
+            "omega_err": omega_err,
+            "v_cmd": v_cmd,
+            "omega_cmd": omega_cmd,
+            "integral_v": self.integral_v,
+            "integral_omega": self.integral_omega,
         }

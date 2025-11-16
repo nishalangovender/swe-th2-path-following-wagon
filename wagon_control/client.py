@@ -10,29 +10,42 @@ and saves collected data to CSV files.
 
 import argparse
 import asyncio
-import csv
 import json
 import logging
-import os
 import signal
 import sys
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, TextIO, Tuple, Union
 import time
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import websockets
 
-from wagon_control.model import inverse_kinematics
+from wagon_control import path
+from wagon_control.config import (
+    FOLLOWER_BASE_LOOKAHEAD,
+    FOLLOWER_LOOKAHEAD_TIME,
+    # Control parameters
+    LOCALIZER_VELOCITY_CORRECTION_GAIN,
+    MOTOR_KI_OMEGA,
+    MOTOR_KI_V,
+    MOTOR_KP_OMEGA,
+    MOTOR_KP_V,
+    PATH_DT,
+    # Path configuration
+    PATH_DURATION,
+    TERM_BLUE,
+    # Terminal colors
+    TERM_RESET,
+    WS_MAX_RETRY_DELAY_SECONDS,
+    WS_RETRY_DELAY_SECONDS,
+    WS_TIMEOUT_SECONDS,
+    # WebSocket configuration
+    WS_URI,
+)
+from wagon_control.data_collector import DataCollector
 from wagon_control.follower import PurePursuitFollower
 from wagon_control.localizer import WagonLocalizer
+from wagon_control.model import inverse_kinematics
 from wagon_control.motor_controller import MotorController
-from wagon_control import path
-
-# Terminal color codes - Monumental branding
-TERM_ORANGE = "\033[38;2;247;72;35m"  # Monumental orange
-TERM_BLUE = "\033[38;2;35;116;247m"  # Complementary blue
-TERM_RESET = "\033[0m"  # Reset color
 
 
 class CustomFormatter(logging.Formatter):
@@ -83,75 +96,53 @@ def setup_logging(verbose: bool = False) -> None:
         logger.addHandler(handler)
 
 
-# Configuration Constants
-WS_URI: str = "ws://91.99.103.188:8765"
-# Test velocity commands (to be replaced by path follower)
-TEST_V_CMD: float = 0.5  # Linear velocity (m/s)
-TEST_OMEGA_CMD: float = 1.0  # Angular velocity (rad/s)
-RETRY_DELAY_SECONDS: int = 1
-MAX_RETRY_DELAY_SECONDS: int = 60
-WEBSOCKET_TIMEOUT_SECONDS: float = 5.0
+class WagonController:
+    """Wagon control system with WebSocket communication and data logging.
 
-
-class SensorDataCollector:
-    """Collects sensor data from WebSocket server and writes to separate CSV files.
-
-    This class manages a WebSocket connection to collect IMU (accelerometer, gyroscope)
-    and GPS data from a wagon simulation server. Data is written to timestamped CSV
-    files in separate directories for each run.
-
-    The class can be used as a context manager to ensure proper cleanup of resources.
+    This class manages the complete wagon control pipeline:
+    - WebSocket connection to simulation server
+    - Sensor data collection (IMU, GPS)
+    - State estimation (localization)
+    - Path following control (Pure Pursuit)
+    - Motor feedback control (PI controller)
+    - Data logging to CSV files
 
     Attributes:
         uri: WebSocket URI to connect to.
-        imu_csv_file: File handle for IMU data CSV.
-        imu_csv_writer: CSV writer for IMU data.
-        gps_csv_file: File handle for GPS data CSV.
-        gps_csv_writer: CSV writer for GPS data.
-        should_stop: Flag indicating whether to stop data collection.
-        run_dir: Directory path for this run's output files.
-        imu_output_path: Path to IMU CSV file.
-        gps_output_path: Path to GPS CSV file.
+        data_collector: Handles CSV file logging.
+        localizer: State estimator (complementary filter).
+        follower: Path follower (Pure Pursuit).
+        motor_controller: Velocity feedback controller (PI).
+        should_stop: Flag indicating whether to stop control loop.
     """
 
     def __init__(self, uri: str, output_dir: str = ".") -> None:
-        """Initialize the sensor data collector.
+        """Initialize the wagon controller.
 
         Args:
             uri: WebSocket URI to connect to (must start with ws:// or wss://).
             output_dir: Base directory for output files (default: current directory).
 
         Raises:
-            ValueError: If URI format is invalid or output_dir is not a directory.
+            ValueError: If URI format is invalid.
         """
         # Validate URI format
         if not uri or not uri.startswith(("ws://", "wss://")):
             raise ValueError(f"Invalid WebSocket URI: {uri}. Must start with 'ws://' or 'wss://'")
 
-        # Validate output directory
-        output_path = Path(output_dir)
-        if output_path.exists() and not output_path.is_dir():
-            raise ValueError(f"Output path exists but is not a directory: {output_dir}")
-
         self.uri: str = uri
-        self.imu_csv_file: Optional[TextIO] = None
-        self.imu_csv_writer: Any = None
-        self.gps_csv_file: Optional[TextIO] = None
-        self.gps_csv_writer: Any = None
-        self.state_csv_file: Optional[TextIO] = None
-        self.state_csv_writer: Any = None
-        self.reference_csv_file: Optional[TextIO] = None
-        self.reference_csv_writer: Any = None
-        self.motor_csv_file: Optional[TextIO] = None
-        self.motor_csv_writer: Any = None
         self.should_stop: bool = False
 
-        # State estimation and control
-        self.localizer = WagonLocalizer()
-        self.follower = PurePursuitFollower(lookahead_distance=1.0)  # Optimized through testing (16-20m error)
+        # Initialize data collector
+        self.data_collector = DataCollector(output_dir=output_dir)
+
+        # Initialize control system components (using config parameters)
+        self.localizer = WagonLocalizer(velocity_correction_gain=LOCALIZER_VELOCITY_CORRECTION_GAIN)
+        self.follower = PurePursuitFollower(
+            lookahead_distance=FOLLOWER_BASE_LOOKAHEAD, lookahead_time=FOLLOWER_LOOKAHEAD_TIME
+        )
         self.motor_controller = MotorController(
-            k_v=0.5, k_omega=0.5,      # Proportional gains (stable baseline)
-            k_i_v=0.1, k_i_omega=0.1   # Integral gains
+            k_v=MOTOR_KP_V, k_omega=MOTOR_KP_OMEGA, k_i_v=MOTOR_KI_V, k_i_omega=MOTOR_KI_OMEGA
         )
 
         # Latest sensor readings (for IMU integration)
@@ -165,90 +156,14 @@ class SensorDataCollector:
         self.last_gps_position: Optional[Tuple[float, float]] = None  # Track stale GPS readings
 
         # Pre-compute reference path
-        path_data = path.path_trajectory(t_max=20.0, dt=0.1)
-        self.path_t = path_data['t']
-        self.path_x = path_data['x']
-        self.path_y = path_data['y']
+        path_data = path.path_trajectory(t_max=PATH_DURATION, dt=PATH_DT)
+        self.path_t = path_data["t"]
+        self.path_x = path_data["x"]
+        self.path_y = path_data["y"]
 
-        # Check if run directory is provided via environment variable (for live plotting)
-        env_run_dir = os.environ.get("RUN_DIR")
-        if env_run_dir:
-            # Use provided run directory
-            self.run_dir: Path = Path(env_run_dir)
-            # Ensure directory exists
-            self.run_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            # Create results folder structure: results/run_YYYYMMDD_HHMMSS/
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            base_dir = output_path
-            results_dir = base_dir / "results"
-            self.run_dir = results_dir / f"run_{timestamp}"
-
-            # Create directory structure
-            self.run_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create output filenames
-        self.imu_output_path: Path = self.run_dir / "imu_data.csv"
-        self.gps_output_path: Path = self.run_dir / "gps_data.csv"
-        self.state_output_path: Path = self.run_dir / "state_data.csv"
-        self.reference_output_path: Path = self.run_dir / "reference_data.csv"
-        self.motor_output_path: Path = self.run_dir / "motor_data.csv"
-
-    def setup_csv(self) -> None:
-        """Initialize CSV files with headers.
-
-        Creates and opens IMU, GPS, state, and reference CSV files with appropriate column headers.
-        """
-        # Setup IMU CSV file
-        self.imu_csv_file = open(self.imu_output_path, "w", newline="")
-        self.imu_csv_writer = csv.writer(self.imu_csv_file)
-        self.imu_csv_writer.writerow(["timestamp", "x_dot", "y_dot", "theta_dot"])
-        self.imu_csv_file.flush()
-
-        # Setup GPS CSV file
-        self.gps_csv_file = open(self.gps_output_path, "w", newline="")
-        self.gps_csv_writer = csv.writer(self.gps_csv_file)
-        self.gps_csv_writer.writerow(["timestamp", "x", "y"])
-        self.gps_csv_file.flush()
-
-        # Setup State CSV file (localized estimates)
-        self.state_csv_file = open(self.state_output_path, "w", newline="")
-        self.state_csv_writer = csv.writer(self.state_csv_file)
-        self.state_csv_writer.writerow(["timestamp", "x_loc", "y_loc", "theta_loc", "v_x", "v_y"])
-        self.state_csv_file.flush()
-
-        # Setup Reference CSV file (path follower's time-based interpretation)
-        self.reference_csv_file = open(self.reference_output_path, "w", newline="")
-        self.reference_csv_writer = csv.writer(self.reference_csv_file)
-        self.reference_csv_writer.writerow(["timestamp", "elapsed_time", "x_ref", "y_ref", "theta_ref"])
-        self.reference_csv_file.flush()
-
-        # Setup Motor CSV file (motor controller feedback)
-        self.motor_csv_file = open(self.motor_output_path, "w", newline="")
-        self.motor_csv_writer = csv.writer(self.motor_csv_file)
-        self.motor_csv_writer.writerow(["timestamp", "v_ref", "omega_ref", "v_loc", "omega_loc", "v_err", "omega_err", "v_cmd", "omega_cmd"])
-        self.motor_csv_file.flush()
-
-        logging.info(
-            f"{TERM_BLUE}✓ Initialized data collection to results/{self.run_dir.name}/{TERM_RESET}"
-        )
-
-    def cleanup(self) -> None:
-        """Close CSV files and log final output location."""
-        if self.imu_csv_file:
-            self.imu_csv_file.close()
-        if self.gps_csv_file:
-            self.gps_csv_file.close()
-        if self.state_csv_file:
-            self.state_csv_file.close()
-        if self.reference_csv_file:
-            self.reference_csv_file.close()
-        if self.motor_csv_file:
-            self.motor_csv_file.close()
-
-        logging.info(f"{TERM_BLUE}✓ Saved sensor data to results/{self.run_dir.name}/{TERM_RESET}")
-
-    async def send_velocity_command(self, websocket: Any, v_left: float, v_right: float, log: bool = False) -> None:
+    async def send_velocity_command(
+        self, websocket: Any, v_left: float, v_right: float, log: bool = False
+    ) -> None:
         """Send velocity command to the WebSocket server.
 
         Args:
@@ -264,10 +179,10 @@ class SensorDataCollector:
             logging.debug(f"Sent command: v_left={v_left:.3f}, v_right={v_right:.3f}")
 
     def process_sensor_message(self, data: Dict[str, Any]) -> None:
-        """Process sensor data message and write to CSV files.
+        """Process sensor data message and log to CSV files.
 
         Extracts IMU (accelerometer, gyroscope) and GPS data from the sensor
-        message and writes them to their respective CSV files.
+        message and passes them to the data collector for logging.
 
         Args:
             data: Parsed JSON message containing sensor data.
@@ -313,58 +228,42 @@ class SensorDataCollector:
                 y = sensor_data[1]
                 gps_timestamp = sensor_timestamp
 
-        # Write IMU data to IMU file
+        # Log IMU data
         if imu_timestamp and (x_dot is not None or y_dot is not None or theta_dot is not None):
-            self.imu_csv_writer.writerow(
-                [
-                    imu_timestamp,
-                    x_dot if x_dot is not None else "",
-                    y_dot if y_dot is not None else "",
-                    theta_dot if theta_dot is not None else "",
-                ]
-            )
-            if self.imu_csv_file:
-                self.imu_csv_file.flush()
+            self.data_collector.log_imu(imu_timestamp, x_dot, y_dot, theta_dot)
 
-        # Write GPS data to GPS file
-        if gps_timestamp and (x is not None or y is not None):
-            self.gps_csv_writer.writerow(
-                [gps_timestamp, x if x is not None else "", y if y is not None else ""]
-            )
-            if self.gps_csv_file:
-                self.gps_csv_file.flush()
+        # Log GPS data and update localizer
+        if gps_timestamp and x is not None and y is not None:
+            self.data_collector.log_gps(gps_timestamp, x, y)
 
             # Update localizer with GPS position
-            if x is not None and y is not None:
-                current_gps = (x, y)
+            current_gps = (x, y)
 
-                # Check if this is a fresh GPS reading (not stale/repeated)
-                is_fresh_gps = (self.last_gps_position is None or
-                               current_gps != self.last_gps_position)
+            # Check if this is a fresh GPS reading (not stale/repeated)
+            is_fresh_gps = self.last_gps_position is None or current_gps != self.last_gps_position
 
-                if not self.initialized and is_fresh_gps:
-                    # First fresh GPS reading - initialize localizer position
-                    print(f"Initializing from first GPS: ({x:.4f}, {y:.4f})")
-                    self.localizer.x = x
-                    self.localizer.y = y
-                    self.localizer.theta = 0.0
-                    self.localizer.v_x = 0.0
-                    self.localizer.v_y = 0.0
-                    self.initialized = True
-                elif self.initialized and is_fresh_gps:
-                    # Normal GPS update after initialization (only when GPS actually changes)
-                    # Pass current time for GPS velocity computation
-                    current_time = time.time()
-                    self.localizer.update_gps(x, y, timestamp=current_time)
+            if not self.initialized and is_fresh_gps:
+                # First fresh GPS reading - initialize localizer position
+                print(f"Initializing from first GPS: ({x:.4f}, {y:.4f})")
+                self.localizer.x = x
+                self.localizer.y = y
+                self.localizer.theta = 0.0
+                self.localizer.v_x = 0.0
+                self.localizer.v_y = 0.0
+                self.initialized = True
+            elif self.initialized and is_fresh_gps:
+                # Normal GPS update after initialization
+                current_time = time.time()
+                self.localizer.update_gps(x, y, timestamp=current_time)
 
-                self.last_gps_position = current_gps
+            self.last_gps_position = current_gps
 
         # Update current gyro data for heading estimation
         if theta_dot is not None:
             self.current_theta_dot = theta_dot
 
-    def process_l2_message(self, data: Dict[str, Any]) -> None:
-        """Process L2 score message and trigger shutdown.
+    def process_score_message(self, data: Dict[str, Any]) -> None:
+        """Process score message and trigger shutdown.
 
         Args:
             data: Parsed JSON message potentially containing score information.
@@ -379,7 +278,7 @@ class SensorDataCollector:
             # Unknown message type - log for debugging
             logging.debug(f"\nReceived unknown message: {json.dumps(data, indent=2)}\n")
 
-    def parse_and_write_message(self, message: Union[str, bytes]) -> None:
+    def parse_and_route_message(self, message: Union[str, bytes]) -> None:
         """Parse incoming message and route to appropriate handler.
 
         Args:
@@ -397,8 +296,8 @@ class SensorDataCollector:
             if message_type == "sensors":
                 self.process_sensor_message(data)
             else:
-                # Any other message type is likely the L2 response
-                self.process_l2_message(data)
+                # Any other message type is likely the score response
+                self.process_score_message(data)
 
         except json.JSONDecodeError as e:
             logging.error(f"Error parsing JSON: {e}")
@@ -407,37 +306,41 @@ class SensorDataCollector:
         except Exception as e:
             logging.error(f"Unexpected error processing message: {e}", exc_info=True)
 
-    async def collect_data(self) -> None:
-        """Connect to WebSocket and collect data continuously.
+    async def run_control_loop(self) -> None:
+        """Connect to WebSocket and run the control loop.
 
         Maintains a connection to the WebSocket server with automatic retry logic
-        and exponential backoff. Continues collecting data until should_stop flag
-        is set (typically by receiving a score message).
+        and exponential backoff. Continues running until should_stop flag is set
+        (typically by receiving a score message).
         """
-        retry_delay = RETRY_DELAY_SECONDS
-        max_retry_delay = MAX_RETRY_DELAY_SECONDS
+        retry_delay = WS_RETRY_DELAY_SECONDS
+        max_retry_delay = WS_MAX_RETRY_DELAY_SECONDS
 
         while not self.should_stop:
             try:
                 async with websockets.connect(self.uri) as websocket:
                     logging.info(f"{TERM_BLUE}✓ Connected to server{TERM_RESET}")
-                    retry_delay = RETRY_DELAY_SECONDS  # Reset retry delay on successful connection
+                    retry_delay = (
+                        WS_RETRY_DELAY_SECONDS  # Reset retry delay on successful connection
+                    )
 
                     # Control loop: continuously update and send commands
                     control_started = False
                     while not self.should_stop:
                         try:
                             message = await asyncio.wait_for(
-                                websocket.recv(), timeout=WEBSOCKET_TIMEOUT_SECONDS
+                                websocket.recv(), timeout=WS_TIMEOUT_SECONDS
                             )
 
                             # Parse sensor message and update state
-                            message_data = message.decode("utf-8") if isinstance(message, bytes) else message
+                            message_data = (
+                                message.decode("utf-8") if isinstance(message, bytes) else message
+                            )
                             parsed_data = json.loads(message_data)
                             message_type = parsed_data.get("message_type")
 
-                            # Always parse and write message to CSV first
-                            self.parse_and_write_message(message)
+                            # Always parse and route message first
+                            self.parse_and_route_message(message)
 
                             # Update localizer and compute control (for sensor messages)
                             if message_type == "sensors":
@@ -451,7 +354,7 @@ class SensorDataCollector:
                                             self.current_ax,
                                             self.current_ay,
                                             self.current_theta_dot,
-                                            dt
+                                            dt,
                                         )
 
                                 self.last_update_time = current_time
@@ -469,48 +372,44 @@ class SensorDataCollector:
                                 ref_state = path.reference_state(elapsed_time)
 
                                 # Log localized state
-                                self.state_csv_writer.writerow([
+                                self.data_collector.log_state(
                                     current_time,
-                                    state['x'],
-                                    state['y'],
-                                    state['theta'],
-                                    state['v_x'],
-                                    state['v_y']
-                                ])
-                                if self.state_csv_file:
-                                    self.state_csv_file.flush()
+                                    state["x"],
+                                    state["y"],
+                                    state["theta"],
+                                    state["v_x"],
+                                    state["v_y"],
+                                )
 
-                                # Log reference state (path follower's time-based interpretation)
-                                self.reference_csv_writer.writerow([
+                                # Log reference state
+                                self.data_collector.log_reference(
                                     current_time,
                                     elapsed_time,
-                                    ref_state['x'],
-                                    ref_state['y'],
-                                    ref_state['theta']
-                                ])
-                                if self.reference_csv_file:
-                                    self.reference_csv_file.flush()
+                                    ref_state["x"],
+                                    ref_state["y"],
+                                    ref_state["theta"],
+                                )
 
                                 # Only run control after initialization from first GPS
                                 if not self.initialized:
                                     # Wait for first fresh GPS - send zero velocity
                                     v_left, v_right = 0.0, 0.0
-                                    await self.send_velocity_command(websocket, v_left=v_left, v_right=v_right)
+                                    await self.send_velocity_command(
+                                        websocket, v_left=v_left, v_right=v_right
+                                    )
                                 else:
                                     # Compute reference commands using pure pursuit
                                     v_ref, omega_ref = self.follower.compute_control(
-                                        state,
-                                        self.path_x, self.path_y, self.path_t,
-                                        current_time
+                                        state, self.path_x, self.path_y, self.path_t, current_time
                                     )
 
                                     # Compute localized velocities for motor controller feedback
                                     v_loc = self.motor_controller.transform_velocity_to_body_frame(
-                                        state['v_x'], state['v_y'], state['theta']
+                                        state["v_x"], state["v_y"], state["theta"]
                                     )
                                     omega_loc = self.current_theta_dot
 
-                                    # Compute dt for motor controller (time since last update)
+                                    # Compute dt for motor controller
                                     if self.last_update_time is not None:
                                         dt_motor = current_time - self.last_update_time
                                     else:
@@ -525,29 +424,23 @@ class SensorDataCollector:
                                     diagnostics = self.motor_controller.get_diagnostics(
                                         v_ref, omega_ref, v_loc, omega_loc, v_cmd, omega_cmd
                                     )
-                                    self.motor_csv_writer.writerow([
-                                        current_time,
-                                        diagnostics['v_ref'],
-                                        diagnostics['omega_ref'],
-                                        diagnostics['v_loc'],
-                                        diagnostics['omega_loc'],
-                                        diagnostics['v_err'],
-                                        diagnostics['omega_err'],
-                                        diagnostics['v_cmd'],
-                                        diagnostics['omega_cmd']
-                                    ])
-                                    if self.motor_csv_file:
-                                        self.motor_csv_file.flush()
+                                    self.data_collector.log_motor_diagnostics(
+                                        current_time, diagnostics
+                                    )
 
                                     # Convert to wheel velocities
                                     v_left, v_right = inverse_kinematics(v_cmd, omega_cmd)
 
                                     # Send velocity command
-                                    await self.send_velocity_command(websocket, v_left=v_left, v_right=v_right)
+                                    await self.send_velocity_command(
+                                        websocket, v_left=v_left, v_right=v_right
+                                    )
 
                                 # Log first control command
                                 if not control_started:
-                                    logging.info(f"{TERM_BLUE}✓ Running pure pursuit path following{TERM_RESET}")
+                                    logging.info(
+                                        f"{TERM_BLUE}✓ Running pure pursuit path following{TERM_RESET}"
+                                    )
                                     control_started = True
 
                         except asyncio.TimeoutError:
@@ -566,16 +459,16 @@ class SensorDataCollector:
                 retry_delay = min(retry_delay * 2, max_retry_delay)
 
     def stop(self) -> None:
-        """Signal the collector to stop data collection."""
+        """Signal the controller to stop."""
         self.should_stop = True
 
-    def __enter__(self) -> "SensorDataCollector":
+    def __enter__(self) -> "WagonController":
         """Context manager entry point.
 
         Returns:
             Self reference for use in with statement.
         """
-        self.setup_csv()
+        self.data_collector.setup()
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -586,30 +479,30 @@ class SensorDataCollector:
             exc_val: Exception value if an exception occurred.
             exc_tb: Exception traceback if an exception occurred.
         """
-        self.cleanup()
+        self.data_collector.cleanup()
 
 
 async def main() -> None:
     """Main entry point for the WebSocket client.
 
-    Creates a SensorDataCollector instance, sets up signal handlers for graceful
-    shutdown, and starts the data collection process.
+    Creates a WagonController instance, sets up signal handlers for graceful
+    shutdown, and starts the control loop.
     """
-    # Create collector and use as context manager for automatic cleanup
-    with SensorDataCollector(WS_URI) as collector:
+    # Create controller and use as context manager for automatic cleanup
+    with WagonController(WS_URI) as controller:
         # Setup signal handlers for graceful shutdown
         loop = asyncio.get_event_loop()
 
         def signal_handler() -> None:
             """Handle shutdown signals (SIGINT, SIGTERM)."""
             logging.info("\nShutdown signal received...")
-            collector.stop()
+            controller.stop()
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, signal_handler)
 
-        # Start collecting data
-        await collector.collect_data()
+        # Start control loop
+        await controller.run_control_loop()
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@
 #   --no-live          Disable live plotting, use post-run visualization
 #   --no-plot          Skip all visualization
 #   --plot-only        Only visualize the most recent run (skip data collection)
+#   --no-csv           Remove CSV files after run (keep only plots)
 #   -h, --help         Show this help message
 
 set -e  # Exit on error
@@ -19,6 +20,7 @@ LIVE_PLOT=true
 PLOT_AFTER=true
 PLOT_ONLY=false
 SAVE_PLOTS="--save"
+KEEP_CSV=true
 
 show_help() {
     echo "Usage: $0 [OPTIONS]"
@@ -31,6 +33,7 @@ show_help() {
     echo "  --no-live          Disable live plotting, show plots after collection"
     echo "  --no-plot          Skip all visualization"
     echo "  --plot-only        Only visualize the most recent run (skip collection)"
+    echo "  --no-csv           Remove CSV files after run (keep only plots)"
     echo "  -h, --help         Show this help message"
     echo ""
     echo "Examples:"
@@ -66,6 +69,10 @@ while [[ $# -gt 0 ]]; do
             PLOT_ONLY=true
             PLOT_AFTER=true
             LIVE_PLOT=false
+            shift
+            ;;
+        --no-csv)
+            KEEP_CSV=false
             shift
             ;;
         -h|--help)
@@ -147,8 +154,8 @@ if [ "$LIVE_PLOT" = true ] && [ "$PLOT_ONLY" = false ]; then
     echo -e "${ORANGE}2. Starting Live Visualization"
     echo -e "${ORANGE}================================${NC}"
 
-    # Start live plotter in background
-    python -m wagon_control.live_plot "$RUN_DIR" &
+    # Start live plotter in background with auto-save enabled
+    python -m wagon_control.live_plot "$RUN_DIR" --save &
     LIVE_PLOT_PID=$!
 
     # Give the plotter a moment to start
@@ -193,6 +200,13 @@ if [ -n "$LIVE_PLOT_PID" ]; then
     if [ -n "$RUN_DIR" ]; then
         python -m wagon_control.plot_results --run "$(basename "$RUN_DIR")" --save --no-show
     fi
+fi
+
+# Clean up CSV files if requested
+if [ "$KEEP_CSV" = false ] && [ -n "$RUN_DIR" ]; then
+    echo -e "${CREAM}Removing CSV files (keeping plots only)...${NC}"
+    rm -f "$RUN_DIR"/*.csv
+    echo -e "${BLUE}✓ CSV files removed${NC}"
 fi
 
 echo -e "${BLUE}✓ Done${NC}"
