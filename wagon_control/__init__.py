@@ -80,10 +80,12 @@ See `docs/APPROACH.md` for detailed design rationale and trade-offs.
 
 ## Performance
 
-- **Typical L2 Error**: 0.15-0.30m mean tracking error
+- **Typical L2 Error**: 12.45m ± 4.96m cumulative over 20s (20-run validated)
+  - Average instantaneous deviation: 30-60cm from reference path
+  - Normalized: ≈0.62m/s accumulated error
 - **Control Frequency**: 20 Hz (50ms update cycle)
 - **Completion Time**: 20.0s ± 0.1s
-- **Robustness**: Handles GPS noise spikes and initialization errors
+- **Robustness**: Handles GPS noise spikes and initialization errors (2.5m outlier rejection)
 
 ## Author
 

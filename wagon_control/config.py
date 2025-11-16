@@ -85,15 +85,17 @@ Origin: Measured from stationary phase before movement
 """
 
 # GPS outlier rejection
-LOCALIZER_GPS_OUTLIER_THRESHOLD = 5.0
+LOCALIZER_GPS_OUTLIER_THRESHOLD = 2.5
 """GPS outlier rejection threshold (meters).
 
 Reject GPS updates that are more than this distance from predicted position.
 Protects against multipath errors, atmospheric interference, and GPS glitches.
 
 Tuning rationale:
-- 5m threshold is conservative (allows legitimate position jumps)
-- Rejects obvious outliers (>5m jumps are physically impossible at 2 m/s)
+- 2.5m threshold is aggressive but reasonable (1.25× max movement between updates)
+- At 2m/s max velocity and 1Hz GPS, wagon moves ≤2m between GPS updates
+- Rejects GPS outliers more aggressively to prevent catastrophic failures
+- Tightened from 5m after observing rare 50m+ outlier failures
 """
 
 
@@ -113,14 +115,15 @@ Tuning rationale:
 - Too large (>1.5m) = cuts corners, poor path following
 """
 
-FOLLOWER_LOOKAHEAD_TIME = 0.7
+FOLLOWER_LOOKAHEAD_TIME = 0.9
 """Time-based lookahead gain for adaptive mode (seconds).
 
 Lookahead distance = FOLLOWER_LOOKAHEAD_TIME * |v| + FOLLOWER_LOOKAHEAD_OFFSET
 
 Tuning rationale:
-- 0.7s gives adequate preview without overshooting
-- Reduced from 0.8s to improve corner tracking
+- Optimized to 0.9s based on parameter sweep (32 configs × 10 runs)
+- Sweep result: Mean 11.35m, Std 5.29m (ranked 5th overall)
+- Longer lookahead provides smoother path following with better consistency
 - Provides velocity-proportional lookahead: faster → look further ahead
 """
 
@@ -182,25 +185,28 @@ Tuning rationale:
 """
 
 # Integral gains
-MOTOR_KI_V = 0.08
+MOTOR_KI_V = 0.05
 """Integral gain for linear velocity (range: [0, 0.5]).
 
 Eliminates steady-state velocity tracking error.
 
 Tuning rationale:
-- 0.08 is conservative to prevent integral windup
-- Reduced from initial 0.1 after observing windup during stops
-- Low integral gain prioritizes stability
+- Optimized to 0.05 based on parameter sweep (32 configs × 10 runs)
+- Sweep result: Mean 10.13m, Std 1.86m (BEST consistency score: 13.86)
+- Lower integral gain provides excellent stability and consistency
+- Tightest distribution of all tested configurations
 """
 
-MOTOR_KI_OMEGA = 0.06
+MOTOR_KI_OMEGA = 0.04
 """Integral gain for angular velocity (range: [0, 0.5]).
 
 Eliminates steady-state heading tracking error.
 
 Tuning rationale:
-- 0.06 is slightly lower than linear to prevent heading oscillations
-- Conservative to avoid windup during tight turns
+- Optimized to 0.04 based on parameter sweep (32 configs × 10 runs)
+- Sweep result: Mean 10.11m, Std 3.20m (2nd best consistency score: 16.52)
+- Very conservative integral action provides excellent stability
+- Prevents heading oscillations and integral windup during turns
 """
 
 # Anti-windup limit

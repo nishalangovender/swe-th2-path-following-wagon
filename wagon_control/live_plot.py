@@ -207,8 +207,8 @@ class LivePlotter:
         self.ax_gps.set_ylabel("Y Position (m)", fontsize=10)
         self.ax_gps.set_title("Trajectory: REF vs GPS vs LOC", fontsize=11, fontweight="bold")
         self.ax_gps.grid(True, alpha=0.2, color=MONUMENTAL_CREAM)
-        self.ax_gps.set_xlim(-2, 2)
-        self.ax_gps.set_ylim(-0.5, 4.5)
+        self.ax_gps.set_xlim(-3, 3)
+        self.ax_gps.set_ylim(-1, 5)
         self.ax_gps.set_aspect("equal")
         legend = self.ax_gps.legend(
             loc="upper right",
