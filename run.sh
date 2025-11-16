@@ -131,16 +131,33 @@ fi
 PYTHON_VERSION=$(python3 --version)
 echo -e "${BLUE}✓ Found $PYTHON_VERSION${NC}"
 
-# Create virtual environment if it doesn't exist
-if [ ! -d "venv" ]; then
+# Check if venv exists and was created with a different Python version
+if [ -d "venv" ]; then
+    # Get the venv's Python version
+    VENV_PYTHON_VERSION=$(venv/bin/python3 --version 2>/dev/null || echo "unknown")
+
+    # Compare versions - if they don't match, recreate the venv
+    if [ "$PYTHON_VERSION" != "$VENV_PYTHON_VERSION" ]; then
+        echo -e "${CREAM}⚠ Virtual environment was created with $VENV_PYTHON_VERSION${NC}"
+        echo -e "${CREAM}⚠ System Python is $PYTHON_VERSION${NC}"
+        echo -e "${CREAM}⚠ Recreating virtual environment to match system Python...${NC}"
+        rm -rf venv
+        python3 -m venv venv
+        echo -e "${BLUE}✓ Recreated virtual environment with $PYTHON_VERSION${NC}"
+    else
+        echo -e "${BLUE}✓ Using existing virtual environment${NC}"
+    fi
+else
     python3 -m venv venv
     echo -e "${BLUE}✓ Created virtual environment${NC}"
-else
-    echo -e "${BLUE}✓ Using existing virtual environment${NC}"
 fi
 
 # Activate virtual environment
 source venv/bin/activate
+
+# Unset PYTHONPATH to ensure venv isolation (critical for cross-platform compatibility)
+# PYTHONPATH can interfere with venv by forcing Python to look in system packages
+unset PYTHONPATH
 
 # Setup cleanup function to deactivate venv on exit
 cleanup() {
