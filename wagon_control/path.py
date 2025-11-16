@@ -83,37 +83,15 @@ def reference_heading(t: float, unwrap: bool = True) -> float:
     if not unwrap:
         return float(theta_ref_wrapped)
 
-    # Unwrap heading to avoid discontinuities
-    # Analytical unwrapping based on path parameter k
-    # At k = -π/2 (t=0): theta ≈ 0
-    # As k increases through the figure-8, heading increases
-    # We need to track cumulative rotation
-
-    # For the Lemniscate path, compute unwrapped heading by
-    # adding correction based on how many times we've wrapped around ±π
-    # The path makes approximately 1 full rotation from k=-π/2 to k=3π/2
-
-    # Empirical correction: the heading wraps from +π to -π
-    # This happens when crossing from Q2 to Q3 (dx<0, dy crosses 0)
-    # For this path, adjust based on k value to maintain continuity
-
-    # At k = -π/2: theta ≈ 0
-    # At k = 0: theta ≈ 3π/4
-    # At k = π/2: theta ≈ 0
-    # At k = π: theta ≈ -3π/4 (should be 5π/4 unwrapped)
-    # At k = 3π/2: theta ≈ 0 (should be 2π unwrapped)
-
-    # Add offset based on k to unwrap
-    if k >= -np.pi / 2 and k <= np.pi:
-        # First half of path: no correction needed
-        offset = 0.0
-    else:
-        # Second half: add 2π to maintain continuity
-        offset = 2.0 * np.pi
-
-    theta_ref_unwrapped = theta_ref_wrapped + offset
-
-    return float(theta_ref_unwrapped)
+    # For the Lemniscate of Gerono, the wrapped heading is naturally continuous
+    # throughout the path. The heading smoothly varies from 0° → 135° → 0° → -135° → 0°
+    # without any discontinuities, even at the crossover points.
+    #
+    # Previous unwrapping approach created an artificial 360° discontinuity at k=π
+    # (t=15s, the second crossover), causing large control errors.
+    #
+    # FIX: Simply return the wrapped heading, which is already continuous for this path.
+    return float(theta_ref_wrapped)
 
 
 def reference_state(t: float) -> dict[str, float]:
