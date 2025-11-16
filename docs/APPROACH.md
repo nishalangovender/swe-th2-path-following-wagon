@@ -105,6 +105,20 @@ The control system consists of four hierarchical layers:
 
 **Result**: Baseline system achieves 7-15m total L2 distance variance over multiple runs.
 
+### Sequential Run Analysis
+
+The run script supports sequential experiments for statistical validation:
+
+```bash
+./run.sh 10    # Run 10 consecutive experiments
+```
+
+This feature enables:
+- **Performance Statistics**: Collect multiple datasets to compute mean/variance of tracking error
+- **Parameter Validation**: Test control parameter robustness across different noise realizations
+- **Automated Testing**: Streamlined data collection without manual plot closing
+- Each run saves to a separate timestamped directory for post-analysis
+
 ## Future Improvements
 
 1. **Extended Kalman Filter (EKF)**: Optimal sensor fusion with uncertainty quantification

@@ -74,6 +74,10 @@ The main runner script `run.sh` handles the complete workflow. **By default, it 
 # Run with live real-time visualization (DEFAULT)
 ./run.sh
 
+# Run multiple sequential experiments (live plots auto-disabled)
+./run.sh 5                    # 5 consecutive runs for statistical analysis
+./run.sh 10 --verbose         # 10 runs with verbose logging
+
 # Run without live plotting, show static plots after collection
 ./run.sh --no-live
 
@@ -88,6 +92,29 @@ The main runner script `run.sh` handles the complete workflow. **By default, it 
 
 # Show all options
 ./run.sh --help
+```
+
+#### Sequential Runs
+
+When running multiple experiments, specify the number of runs as the first argument:
+
+```bash
+./run.sh 5    # Runs the control system 5 times sequentially
+```
+
+**Features:**
+- Live plots are automatically disabled to avoid manual plot closing
+- Each run saves to a separate timestamped directory in `results/`
+- Progress indicators show "Run X of Y" status
+- 2-second pause between runs to allow system reset
+- Useful for gathering statistical data on control performance
+
+**Example Output:**
+```
+[Sequential Mode] Running 5 times (live plots disabled)
+--- Run 1 of 5 ---
+--- Run 2 of 5 ---
+...
 ```
 
 #### Live Visualization
@@ -173,6 +200,19 @@ Expected behavior:
 - Runs for 20 seconds with real-time control updates
 - Score: L2 distance metric displayed at completion
 - Typical L2 error: 0.15-0.30m mean tracking error
+
+### Statistical Validation
+
+To validate control parameter robustness across different noise realizations:
+
+```bash
+./run.sh 10    # Collect 10 datasets for statistical analysis
+```
+
+This is useful for:
+- Computing mean and variance of tracking performance
+- Testing parameter sensitivity across multiple runs
+- Establishing baseline performance metrics
 
 ### Configuration Tuning
 

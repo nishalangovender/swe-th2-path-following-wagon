@@ -1,11 +1,15 @@
 #!/bin/bash
 # Wagon Control System - Automated Setup and Run Script
 # This script creates a virtual environment, installs dependencies, and runs the wagon control system
-# Usage: ./run.sh [OPTIONS]
+# Usage: ./run.sh [NUM_RUNS] [OPTIONS]
+#
+# Arguments:
+#   NUM_RUNS           Number of sequential runs (default: 1)
+#                      Note: Live plots are automatically disabled for multiple runs
 #
 # Options:
 #   -v, --verbose      Enable verbose logging
-#   --live             Enable live real-time visualization (default)
+#   --live             Enable live real-time visualization (default for single run)
 #   --no-live          Disable live plotting, use post-run visualization
 #   --no-plot          Skip all visualization
 #   --plot-only        Only visualize the most recent run (skip data collection)
@@ -14,6 +18,12 @@
 
 set -e  # Exit on error
 
+# Color codes for output - Monumental branding
+ORANGE='\033[38;2;247;72;35m'         # Monumental orange #f74823
+BLUE='\033[38;2;35;116;247m'          # Complementary blue #2374f7
+CREAM='\033[38;2;255;253;238m'        # Monumental cream #fffdee
+NC='\033[0m' # No Color
+
 # Parse command-line arguments
 VERBOSE=""
 LIVE_PLOT=true
@@ -21,15 +31,20 @@ PLOT_AFTER=true
 PLOT_ONLY=false
 SAVE_PLOTS="--save"
 KEEP_CSV=true
+NUM_RUNS=1
 
 show_help() {
-    echo "Usage: $0 [OPTIONS]"
+    echo "Usage: $0 [NUM_RUNS] [OPTIONS]"
     echo ""
     echo "Wagon Control System - Run data collection and visualization"
     echo ""
+    echo "Arguments:"
+    echo "  NUM_RUNS           Number of sequential runs (default: 1)"
+    echo "                     Note: Live plots are auto-disabled for multiple runs"
+    echo ""
     echo "Options:"
     echo "  -v, --verbose      Enable verbose logging with timestamps"
-    echo "  --live             Enable live real-time visualization (default)"
+    echo "  --live             Enable live real-time visualization (default for single run)"
     echo "  --no-live          Disable live plotting, show plots after collection"
     echo "  --no-plot          Skip all visualization"
     echo "  --plot-only        Only visualize the most recent run (skip collection)"
@@ -37,13 +52,26 @@ show_help() {
     echo "  -h, --help         Show this help message"
     echo ""
     echo "Examples:"
-    echo "  ./run.sh                    # Run with live visualization (default)"
-    echo "  ./run.sh --no-live          # Run, then show plots after completion"
+    echo "  ./run.sh                    # Single run with live visualization"
+    echo "  ./run.sh 5                  # 5 sequential runs (live plots disabled)"
+    echo "  ./run.sh 3 --verbose        # 3 runs with verbose logging"
+    echo "  ./run.sh --no-live          # Single run, then show plots after completion"
     echo "  ./run.sh --no-plot          # Run data collection only, no plots"
     echo "  ./run.sh --plot-only        # Just visualize the last run"
-    echo "  ./run.sh --verbose          # Run with verbose logging and live plots"
     exit 0
 }
+
+# Check if first argument is a number (NUM_RUNS)
+if [[ $# -gt 0 ]] && [[ $1 =~ ^[0-9]+$ ]]; then
+    NUM_RUNS=$1
+    shift
+
+    # Auto-disable live plots for multiple runs
+    if [ "$NUM_RUNS" -gt 1 ]; then
+        LIVE_PLOT=false
+        echo -e "${ORANGE}[Sequential Mode] Running $NUM_RUNS times (live plots disabled)${NC}"
+    fi
+fi
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -85,12 +113,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
-# Color codes for output - Monumental branding
-ORANGE='\033[38;2;247;72;35m'         # Monumental orange #f74823
-BLUE='\033[38;2;35;116;247m'          # Complementary blue #2374f7
-CREAM='\033[38;2;255;253;238m'        # Monumental cream #fffdee
-NC='\033[0m' # No Color
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -171,13 +193,26 @@ if [ "$PLOT_ONLY" = false ]; then
         echo -e "${CREAM}Running in verbose mode${NC}"
     fi
 
-    # Run the wagon control system
-    if [ -n "$RUN_DIR" ]; then
-        # Pass run directory to client for live plotting
-        RUN_DIR="$RUN_DIR" python -m wagon_control.client $VERBOSE
-    else
-        python -m wagon_control.client $VERBOSE
-    fi
+    # Run the wagon control system NUM_RUNS times
+    for ((run=1; run<=NUM_RUNS; run++)); do
+        if [ "$NUM_RUNS" -gt 1 ]; then
+            echo -e "${ORANGE}--- Run $run of $NUM_RUNS ---${NC}"
+        fi
+
+        # Run the wagon control system
+        if [ -n "$RUN_DIR" ]; then
+            # Pass run directory to client for live plotting
+            RUN_DIR="$RUN_DIR" python -m wagon_control.client $VERBOSE
+        else
+            python -m wagon_control.client $VERBOSE
+        fi
+
+        # Brief pause between runs (except after the last one)
+        if [ "$NUM_RUNS" -gt 1 ] && [ "$run" -lt "$NUM_RUNS" ]; then
+            echo -e "${CREAM}Waiting 2 seconds before next run...${NC}"
+            sleep 2
+        fi
+    done
 fi
 
 # Run post-visualization if requested (non-live mode)
