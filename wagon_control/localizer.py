@@ -1,144 +1,212 @@
 """Localization module for wagon state estimation.
 
 This module provides state estimation by fusing GPS and IMU sensor data.
-Implements a complementary filter approach:
-- GPS corrections at 1 Hz for position
+Implements an Extended Kalman Filter (EKF) approach:
+- GPS corrections at 1 Hz for position measurements
 - IMU integration at 20 Hz for continuous state prediction
-- Accelerometer odometry for velocity and position between GPS updates
+- Gyro bias estimation to reduce heading drift
+- Principled uncertainty quantification via covariance propagation
 """
 
 import math
+import numpy as np
 from typing import Dict, Optional
 
 
 class WagonLocalizer:
-    """State estimator using complementary filter with GPS and IMU fusion.
+    """State estimator using Extended Kalman Filter (EKF) with GPS and IMU fusion.
 
-    State components:
-        - x, y: Position (meters) - predicted from IMU, corrected by GPS
-        - theta: Heading (radians) - integrated from gyroscope
-        - v_x, v_y: Velocity (m/s) in global frame - integrated from accelerometer
+    State vector (5 elements):
+        - px, py: Position (meters) in global frame
+        - theta: Heading (radians)
+        - v: Forward velocity (m/s) in body frame
+        - b_g: Gyroscope bias (rad/s)
+
+    Sensors:
+        - IMU: gyro_z (angular rate), acc_x (longitudinal acceleration) at ~20 Hz
+        - GPS: position (px, py) at ~1 Hz
+
+    The EKF maintains state covariance P and propagates uncertainty through
+    process model (predict) and measurement model (update).
     """
 
-    def __init__(self, velocity_correction_gain: float = 0.5):
-        """Initialize the localizer with zero state.
+    def __init__(self, velocity_correction_gain: float = 0.5, config=None):
+        """Initialize the EKF localizer.
 
         Args:
-            velocity_correction_gain: Gain for velocity correction when GPS arrives.
-                Range [0, 1]. Higher = more aggressive correction of drift.
-                Default: 0.5 (moderate damping, balanced stability and drift correction)
+            velocity_correction_gain: Maintained for API compatibility but unused in EKF.
+            config: Configuration dictionary or module with EKF parameters.
+                    If None, uses default values from wagon_control.config.
         """
-        # Position and heading
-        self.x: float = 0.0
-        self.y: float = 0.0
-        self.theta: float = 0.0  # Initial heading along +x axis
+        # Import config if not provided
+        if config is None:
+            from wagon_control import config as cfg
+        else:
+            cfg = config
 
-        # Velocity (global frame)
-        self.v_x: float = 0.0
-        self.v_y: float = 0.0
+        # EKF noise parameters (apply scaling factors for tuning)
+        self.Q = cfg.EKF_Q.copy() * cfg.EKF_Q_SCALE  # Process noise covariance (5×5)
+        self.R_gps = cfg.EKF_R_GPS.copy() * cfg.EKF_R_SCALE  # GPS measurement noise covariance (2×2)
+        self.mahalanobis_threshold = cfg.EKF_MAHALANOBIS_THRESHOLD
 
-        # Filtered velocity (low-pass filtered for feedback control)
-        self.v_x_filtered: float = 0.0
-        self.v_y_filtered: float = 0.0
-        self.velocity_filter_alpha: float = 0.3  # EMA smoothing: 30% new, 70% old
+        # State vector: [px, py, theta, v, b_g]
+        self.x = np.zeros((5, 1))
 
-        # Velocity correction gain
-        self.velocity_correction_gain: float = velocity_correction_gain
+        # State covariance
+        self.P = cfg.EKF_P0.copy()
 
-        # IMU bias compensation (gyro and accelerometer are in same unit)
-        # Gyroscope bias (estimated from baseline drift: -16.68° over 20s)
-        self.gyro_bias_compensation: float = 0.015  # rad/s
-        # Accelerometer X-axis bias (from stationary phase analysis: 0.0958 m/s²)
-        self.accel_x_bias: float = 0.096  # m/s²
+        # Initialization flag
+        self.initialized = False
+
+        # Timestamp for dt calculation
+        self.t_prev = 0.0
+
+        # Diagnostics (for logging/tuning)
+        self.last_innovation = np.zeros((2, 1))
+        self.last_mahalanobis = 0.0
+        self.gps_outliers_rejected = 0
 
     def update_gps(self, x: float, y: float, timestamp: Optional[float] = None) -> None:
-        """Update position estimate from GPS measurement and correct velocity drift.
+        """Update state estimate from GPS position measurement.
 
-        Uses complementary filter approach:
-        1. GPS outlier detection (reject if >5m from predicted)
-        2. Compute position error (GPS - estimated)
-        3. Hard reset position to GPS (full correction)
-        4. Soft correct velocity proportional to position error (damped correction)
+        Uses EKF measurement update (correction step) with Mahalanobis distance
+        outlier rejection. Rejects GPS measurements that are statistically
+        inconsistent with current state estimate and uncertainty.
 
         Args:
             x: GPS x-coordinate (meters)
             y: GPS y-coordinate (meters)
-            timestamp: GPS timestamp (seconds), optional (unused in baseline)
+            timestamp: GPS timestamp (seconds), used for initialization
         """
-        # GPS outlier detection: reject updates too far from predicted position
-        innovation_x = x - self.x
-        innovation_y = y - self.y
-        innovation_magnitude = math.sqrt(innovation_x**2 + innovation_y**2)
+        # Initialize from first GPS measurement
+        if not self.initialized:
+            self.x[0, 0] = x  # px
+            self.x[1, 0] = y  # py
+            self.x[2, 0] = 0.0  # theta (assume facing +x initially)
+            self.x[3, 0] = 0.0  # v (stationary initially)
+            self.x[4, 0] = 0.0  # b_g (zero bias initially)
+            self.t_prev = timestamp if timestamp is not None else 0.0
+            self.initialized = True
+            return
 
-        if innovation_magnitude > 5.0:  # Threshold: 5 meters
-            # Reject likely GPS outlier (multipath, atmospheric error, etc.)
-            print(
-                f"GPS outlier rejected: {innovation_magnitude:.2f}m deviation from predicted position"
-            )
-            return  # Skip this GPS update
+        # Measurement model: z = h(x) = [px, py]
+        H = np.zeros((2, 5))
+        H[0, 0] = 1.0  # ∂h₁/∂px = 1
+        H[1, 1] = 1.0  # ∂h₂/∂py = 1
 
-        # Compute position error for velocity correction
-        error_x = innovation_x
-        error_y = innovation_y
+        # Measurement vector
+        z = np.array([[x], [y]])
 
-        # Hard reset position to GPS measurement (full correction)
-        self.x = x
-        self.y = y
+        # Predicted measurement
+        z_pred = H @ self.x
 
-        # Soft correct velocity drift (proportional to position error)
-        # This prevents unbounded velocity drift from accelerometer integration
-        self.v_x += self.velocity_correction_gain * error_x
-        self.v_y += self.velocity_correction_gain * error_y
+        # Innovation (measurement residual)
+        y_innov = z - z_pred
+        self.last_innovation = y_innov.copy()
 
-    def update_imu(self, a_x_body: float, a_y_body: float, theta_dot: float, dt: float) -> None:
-        """Update state estimate by integrating IMU measurements.
+        # Innovation covariance
+        S = H @ self.P @ H.T + self.R_gps
 
-        Performs complementary filter prediction step:
-        1. Apply IMU bias compensation
-        2. Integrate gyroscope to update heading
-        3. Transform body-frame accelerations to global frame
-        4. Integrate accelerations to update velocity
-        5. Integrate velocity to update position
+        # Mahalanobis distance for outlier detection
+        # d² = innovation.T @ S_inv @ innovation (chi-square distributed, 2 DOF)
+        try:
+            S_inv = np.linalg.inv(S)
+            mahalanobis_sq = float(y_innov.T @ S_inv @ y_innov)
+            self.last_mahalanobis = math.sqrt(mahalanobis_sq)
+
+            # Reject outliers using chi-square threshold
+            if mahalanobis_sq > self.mahalanobis_threshold:
+                self.gps_outliers_rejected += 1
+                print(
+                    f"GPS outlier rejected: Mahalanobis distance {self.last_mahalanobis:.2f} "
+                    f"(threshold {math.sqrt(self.mahalanobis_threshold):.2f}), "
+                    f"innovation [{y_innov[0,0]:.2f}, {y_innov[1,0]:.2f}]m"
+                )
+                return
+        except np.linalg.LinAlgError:
+            # If S is singular, skip this update
+            print("Warning: Singular innovation covariance matrix, skipping GPS update")
+            return
+
+        # Kalman gain
+        K = self.P @ H.T @ S_inv
+
+        # State update
+        self.x = self.x + K @ y_innov
+
+        # Covariance update (Joseph form for numerical stability)
+        I = np.eye(5)
+        IKH = I - K @ H
+        self.P = IKH @ self.P @ IKH.T + K @ self.R_gps @ K.T
+
+        # Normalize heading to [-π, π]
+        self.x[2, 0] = math.atan2(math.sin(self.x[2, 0]), math.cos(self.x[2, 0]))
+
+    def update_imu(
+        self, a_x_body: float, a_y_body: float, theta_dot: float, dt: float
+    ) -> None:
+        """Update state estimate by integrating IMU measurements (EKF prediction step).
+
+        Propagates state through nonlinear kinematic model and linearizes for
+        covariance propagation. Uses gyro angular rate and longitudinal acceleration.
 
         Args:
             a_x_body: Body-frame x-acceleration (forward direction, m/s²)
-            a_y_body: Body-frame y-acceleration (lateral direction, m/s²)
+            a_y_body: Body-frame y-acceleration (lateral direction, m/s²) - ignored
             theta_dot: Angular velocity from gyroscope (rad/s)
             dt: Time step since last update (seconds)
         """
-        # Step 1: Apply IMU bias compensation
-        a_x_body = a_x_body - self.accel_x_bias  # Remove forward acceleration bias
-        theta_dot = theta_dot + self.gyro_bias_compensation  # Correct gyro bias
+        if not self.initialized:
+            return
 
-        # Step 2: Update heading by integrating corrected gyroscope
-        self.theta += theta_dot * dt
-        # Normalize angle to [-pi, pi]
-        self.theta = math.atan2(math.sin(self.theta), math.cos(self.theta))
+        if dt <= 0:
+            return
 
-        # Step 3: Transform body-frame accelerations to global frame
-        # Differential drive constraint: robot cannot move sideways (v_y_body = 0)
-        # Therefore, ignore lateral acceleration and only use forward acceleration
-        cos_theta = math.cos(self.theta)
-        sin_theta = math.sin(self.theta)
+        # Extract current state
+        px, py, theta, v, b_g = self.x.flatten()
 
-        # Only use forward acceleration (a_x_body), ignore lateral (a_y_body)
-        # to enforce kinematic constraint of differential drive
-        a_x_global = a_x_body * cos_theta
-        a_y_global = a_x_body * sin_theta
+        # Bias-corrected gyro measurement
+        omega = theta_dot - b_g
 
-        # Step 4: Integrate accelerations to update velocity (global frame)
-        self.v_x += a_x_global * dt
-        self.v_y += a_y_global * dt
+        # Longitudinal acceleration (ignore lateral for differential drive)
+        a_long = a_x_body
 
-        # Step 5: Apply low-pass filter to velocities for smooth feedback control
-        # Exponential moving average: v_filtered = alpha * v_new + (1-alpha) * v_old
-        alpha = self.velocity_filter_alpha
-        self.v_x_filtered = alpha * self.v_x + (1 - alpha) * self.v_x_filtered
-        self.v_y_filtered = alpha * self.v_y + (1 - alpha) * self.v_y_filtered
+        # Nonlinear state propagation: x_{k+1} = f(x_k, u_k)
+        theta_new = theta + omega * dt
+        v_new = v + a_long * dt
+        px_new = px + v * math.cos(theta) * dt
+        py_new = py + v * math.sin(theta) * dt
+        b_g_new = b_g  # Bias modeled as random walk
 
-        # Step 6: Integrate velocity to update position
-        self.x += self.v_x * dt
-        self.y += self.v_y * dt
+        # Update state vector
+        self.x = np.array([[px_new], [py_new], [theta_new], [v_new], [b_g_new]])
+
+        # Normalize heading to [-π, π]
+        self.x[2, 0] = math.atan2(math.sin(self.x[2, 0]), math.cos(self.x[2, 0]))
+
+        # Compute Jacobian F = ∂f/∂x (linearization for covariance propagation)
+        F = np.eye(5)
+
+        # ∂px_new/∂theta = -v * sin(theta) * dt
+        F[0, 2] = -v * math.sin(theta) * dt
+
+        # ∂px_new/∂v = cos(theta) * dt
+        F[0, 3] = math.cos(theta) * dt
+
+        # ∂py_new/∂theta = v * cos(theta) * dt
+        F[1, 2] = v * math.cos(theta) * dt
+
+        # ∂py_new/∂v = sin(theta) * dt
+        F[1, 3] = math.sin(theta) * dt
+
+        # ∂theta_new/∂b_g = -dt (since omega = theta_dot - b_g)
+        F[2, 4] = -dt
+
+        # ∂v_new/∂v = 1 (already in identity)
+        # ∂b_g_new/∂b_g = 1 (already in identity)
+
+        # Covariance propagation: P_{k+1} = F @ P_k @ F.T + Q
+        self.P = F @ self.P @ F.T + self.Q
 
     def get_state(self) -> Dict[str, float]:
         """Get current state estimate.
@@ -148,23 +216,60 @@ class WagonLocalizer:
                 - x: Position x-coordinate (m)
                 - y: Position y-coordinate (m)
                 - theta: Heading angle (rad)
-                - v_x: Velocity x-component in global frame (m/s, filtered)
-                - v_y: Velocity y-component in global frame (m/s, filtered)
+                - v_x: Velocity x-component in global frame (m/s)
+                - v_y: Velocity y-component in global frame (m/s)
+
+        Note: EKF tracks forward velocity v in body frame. This method converts
+        to global frame velocities (v_x, v_y) for compatibility with existing
+        control system.
+        """
+        px, py, theta, v, b_g = self.x.flatten()
+
+        # Convert body-frame forward velocity to global frame components
+        v_x = v * math.cos(theta)
+        v_y = v * math.sin(theta)
+
+        return {
+            "x": float(px),
+            "y": float(py),
+            "theta": float(theta),
+            "v_x": float(v_x),
+            "v_y": float(v_y),
+        }
+
+    def get_diagnostics(self) -> Dict[str, float]:
+        """Get EKF diagnostic information for tuning and monitoring.
+
+        Returns:
+            Dictionary containing:
+                - P_trace: Trace of covariance matrix (total uncertainty)
+                - P_diag: Diagonal elements of P (individual state uncertainties)
+                - innovation_norm: L2 norm of last GPS innovation
+                - mahalanobis: Mahalanobis distance of last GPS update
+                - gyro_bias: Current gyro bias estimate (rad/s)
+                - outliers_rejected: Total count of GPS outliers rejected
         """
         return {
-            "x": self.x,
-            "y": self.y,
-            "theta": self.theta,
-            "v_x": self.v_x_filtered,  # Return filtered velocity for feedback control
-            "v_y": self.v_y_filtered,  # Return filtered velocity for feedback control
+            "P_trace": float(np.trace(self.P)),
+            "P_px": float(self.P[0, 0]),
+            "P_py": float(self.P[1, 1]),
+            "P_theta": float(self.P[2, 2]),
+            "P_v": float(self.P[3, 3]),
+            "P_b_g": float(self.P[4, 4]),
+            "innovation_norm": float(np.linalg.norm(self.last_innovation)),
+            "mahalanobis": float(self.last_mahalanobis),
+            "gyro_bias": float(self.x[4, 0]),
+            "outliers_rejected": self.gps_outliers_rejected,
         }
 
     def reset(self) -> None:
-        """Reset state to initial conditions (origin, facing +x, stationary)."""
-        self.x = 0.0
-        self.y = 0.0
-        self.theta = 0.0
-        self.v_x = 0.0
-        self.v_y = 0.0
-        self.v_x_filtered = 0.0
-        self.v_y_filtered = 0.0
+        """Reset EKF to initial conditions (uninitialized state)."""
+        self.x = np.zeros((5, 1))
+        # Reload initial covariance
+        from wagon_control import config as cfg
+        self.P = cfg.EKF_P0.copy()
+        self.initialized = False
+        self.t_prev = 0.0
+        self.last_innovation = np.zeros((2, 1))
+        self.last_mahalanobis = 0.0
+        self.gps_outliers_rejected = 0

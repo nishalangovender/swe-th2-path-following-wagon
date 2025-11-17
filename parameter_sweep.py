@@ -335,7 +335,23 @@ class ParameterTester:
                     )
                 )
 
-            # 6. Test baseline configuration for comparison
+            # 6. EKF process noise scaling (Q matrix)
+            for q_scale in [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]:
+                self.results.append(
+                    self.test_configuration(
+                        f"EKF_Q_SCALE={q_scale}", {"EKF_Q_SCALE": q_scale}
+                    )
+                )
+
+            # 7. EKF measurement noise scaling (R matrix for GPS)
+            for r_scale in [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]:
+                self.results.append(
+                    self.test_configuration(
+                        f"EKF_R_SCALE={r_scale}", {"EKF_R_SCALE": r_scale}
+                    )
+                )
+
+            # 8. Test baseline configuration for comparison
             self.results.append(
                 self.test_configuration(
                     "Baseline (ce8b3ef)",
@@ -345,20 +361,24 @@ class ParameterTester:
                         "FOLLOWER_LOOKAHEAD_TIME": 0.8,
                         "MOTOR_KI_V": 0.1,
                         "MOTOR_KI_OMEGA": 0.1,
+                        "EKF_Q_SCALE": 1.0,
+                        "EKF_R_SCALE": 1.0,
                     },
                 )
             )
 
-            # 7. Test current configuration for comparison
+            # 9. Test current configuration for comparison
             self.results.append(
                 self.test_configuration(
-                    "Current Config",
+                    "Current Config (EKF)",
                     {
                         "LOCALIZER_VELOCITY_CORRECTION_GAIN": 0.45,
                         "FOLLOWER_BASE_LOOKAHEAD": 0.8,
                         "FOLLOWER_LOOKAHEAD_TIME": 0.7,
                         "MOTOR_KI_V": 0.08,
                         "MOTOR_KI_OMEGA": 0.06,
+                        "EKF_Q_SCALE": 1.0,
+                        "EKF_R_SCALE": 1.0,
                     },
                 )
             )

@@ -6,6 +6,7 @@ This module provides CSV data logging for:
 - State estimates (localized position, velocity, heading)
 - Reference trajectory (planned path)
 - Motor controller diagnostics (velocities, errors, commands)
+- EKF diagnostics (covariance, innovations, gyro bias)
 """
 
 import csv
@@ -33,6 +34,7 @@ class DataCollector:
         state_csv_file: File handle for state estimates CSV.
         reference_csv_file: File handle for reference trajectory CSV.
         motor_csv_file: File handle for motor controller CSV.
+        ekf_csv_file: File handle for EKF diagnostics CSV.
     """
 
     def __init__(self, output_dir: str = ".", run_dir: Optional[str] = None) -> None:
@@ -62,6 +64,8 @@ class DataCollector:
         self.reference_csv_writer: Any = None
         self.motor_csv_file: Optional[TextIO] = None
         self.motor_csv_writer: Any = None
+        self.ekf_csv_file: Optional[TextIO] = None
+        self.ekf_csv_writer: Any = None
 
         # Determine run directory
         if run_dir:
@@ -85,6 +89,7 @@ class DataCollector:
         self.state_output_path: Path = self.run_dir / "state_data.csv"
         self.reference_output_path: Path = self.run_dir / "reference_data.csv"
         self.motor_output_path: Path = self.run_dir / "motor_data.csv"
+        self.ekf_output_path: Path = self.run_dir / "ekf_diagnostics.csv"
 
     def setup(self) -> None:
         """Initialize CSV files with headers.
@@ -135,6 +140,26 @@ class DataCollector:
             ]
         )
         self.motor_csv_file.flush()
+
+        # Setup EKF diagnostics CSV file
+        self.ekf_csv_file = open(self.ekf_output_path, "w", newline="")
+        self.ekf_csv_writer = csv.writer(self.ekf_csv_file)
+        self.ekf_csv_writer.writerow(
+            [
+                "timestamp",
+                "P_trace",
+                "P_px",
+                "P_py",
+                "P_theta",
+                "P_v",
+                "P_b_g",
+                "innovation_norm",
+                "mahalanobis",
+                "gyro_bias",
+                "outliers_rejected",
+            ]
+        )
+        self.ekf_csv_file.flush()
 
         print(
             f"{TERM_BLUE}✓ Initialized data collection to results/{self.run_dir.name}/{TERM_RESET}"
@@ -236,6 +261,33 @@ class DataCollector:
         if self.motor_csv_file:
             self.motor_csv_file.flush()
 
+    def log_ekf_diagnostics(self, timestamp: float, diagnostics: Dict[str, float]) -> None:
+        """Log EKF diagnostics to CSV.
+
+        Args:
+            timestamp: Current time (seconds).
+            diagnostics: Dictionary containing EKF data with keys:
+                'P_trace', 'P_px', 'P_py', 'P_theta', 'P_v', 'P_b_g',
+                'innovation_norm', 'mahalanobis', 'gyro_bias', 'outliers_rejected'
+        """
+        self.ekf_csv_writer.writerow(
+            [
+                timestamp,
+                diagnostics["P_trace"],
+                diagnostics["P_px"],
+                diagnostics["P_py"],
+                diagnostics["P_theta"],
+                diagnostics["P_v"],
+                diagnostics["P_b_g"],
+                diagnostics["innovation_norm"],
+                diagnostics["mahalanobis"],
+                diagnostics["gyro_bias"],
+                diagnostics["outliers_rejected"],
+            ]
+        )
+        if self.ekf_csv_file:
+            self.ekf_csv_file.flush()
+
     def cleanup(self) -> None:
         """Close all CSV files and log final output location."""
         if self.imu_csv_file:
@@ -248,6 +300,8 @@ class DataCollector:
             self.reference_csv_file.close()
         if self.motor_csv_file:
             self.motor_csv_file.close()
+        if self.ekf_csv_file:
+            self.ekf_csv_file.close()
 
         print(f"{TERM_BLUE}✓ Saved sensor data to results/{self.run_dir.name}/{TERM_RESET}")
 

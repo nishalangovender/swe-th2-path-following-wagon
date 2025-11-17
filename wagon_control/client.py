@@ -245,11 +245,8 @@ class WagonController:
             if not self.initialized and is_fresh_gps:
                 # First fresh GPS reading - initialize localizer position
                 print(f"Initializing from first GPS: ({x:.4f}, {y:.4f})")
-                self.localizer.x = x
-                self.localizer.y = y
-                self.localizer.theta = 0.0
-                self.localizer.v_x = 0.0
-                self.localizer.v_y = 0.0
+                current_time = time.time()
+                self.localizer.update_gps(x, y, timestamp=current_time)
                 self.initialized = True
             elif self.initialized and is_fresh_gps:
                 # Normal GPS update after initialization
@@ -380,6 +377,10 @@ class WagonController:
                                     state["v_x"],
                                     state["v_y"],
                                 )
+
+                                # Log EKF diagnostics
+                                ekf_diagnostics = self.localizer.get_diagnostics()
+                                self.data_collector.log_ekf_diagnostics(current_time, ekf_diagnostics)
 
                                 # Log reference state
                                 self.data_collector.log_reference(

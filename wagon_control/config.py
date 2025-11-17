@@ -10,6 +10,8 @@ This module centralizes all configuration parameters including:
 All parameters are documented with their purpose, valid ranges, and tuning rationale.
 """
 
+import numpy as np
+
 # ============================================================================
 # Physical Robot Parameters
 # ============================================================================
@@ -100,6 +102,108 @@ Tuning rationale:
 
 
 # ============================================================================
+# Extended Kalman Filter (EKF) Parameters
+# ============================================================================
+
+# EKF state vector: [px, py, theta, v, b_g]
+#   px, py: position (m)
+#   theta: heading (rad)
+#   v: forward velocity (m/s)
+#   b_g: gyro bias (rad/s)
+
+# Process noise covariance Q (5×5)
+EKF_Q_DIAG = [
+    0.01,    # px process noise (m²)
+    0.01,    # py process noise (m²)
+    1e-4,    # theta process noise (rad²)
+    0.1,     # v process noise (m²/s²)
+    1e-6     # b_g process noise (rad²/s²)
+]
+"""Process noise covariance diagonal for EKF.
+
+Tuning rationale:
+- Position noise (px, py): Small values (0.01) since position accumulates from velocity
+- Heading noise (theta): Very small (1e-4) for gyro integration with bias estimation
+- Velocity noise (v): Moderate (0.1) to account for accelerometer noise and model mismatch
+- Gyro bias noise (b_g): Very small (1e-6) models slow random walk of bias over time
+"""
+
+EKF_Q = np.diag(EKF_Q_DIAG)
+
+# GPS measurement noise covariance R (2×2)
+EKF_R_GPS_SIGMA = 3.0  # GPS position uncertainty (meters, 1-sigma)
+"""GPS measurement noise standard deviation (meters).
+
+Based on typical consumer GPS horizontal accuracy:
+- Open sky: 2-5m (95% confidence)
+- Urban canyon: 5-10m (95% confidence)
+- Conservative value: 3m (1-sigma) ≈ 6m (95% confidence)
+"""
+
+EKF_R_GPS = np.diag([EKF_R_GPS_SIGMA**2, EKF_R_GPS_SIGMA**2])
+
+# Initial state covariance P0 (5×5)
+EKF_P0_DIAG = [
+    10.0,    # px initial uncertainty (m²)
+    10.0,    # py initial uncertainty (m²)
+    0.5,     # theta initial uncertainty (rad²)
+    1.0,     # v initial uncertainty (m²/s²)
+    0.1      # b_g initial uncertainty (rad²/s²)
+]
+"""Initial state covariance diagonal for EKF.
+
+Rationale:
+- Large position uncertainty (10m) since initial GPS may be noisy
+- Moderate heading uncertainty (0.5 rad ≈ 40°) before gyro integration stabilizes
+- Moderate velocity uncertainty (1 m/s) until acceleration integration stabilizes
+- Small bias uncertainty (0.1) allows quick convergence during initial maneuvers
+"""
+
+EKF_P0 = np.diag(EKF_P0_DIAG)
+
+# Mahalanobis distance threshold for GPS outlier rejection
+EKF_MAHALANOBIS_THRESHOLD = 9.21
+"""Chi-square threshold for GPS outlier rejection (2 DOF, 99% confidence).
+
+Using innovation-based outlier detection: d² = innovation.T @ S_inv @ innovation
+where S is the innovation covariance (H @ P @ H.T + R).
+
+Threshold values (chi-square distribution, 2 degrees of freedom):
+- 95% confidence: 5.99
+- 99% confidence: 9.21
+- 99.9% confidence: 13.82
+
+Tuning rationale:
+- 99% threshold rejects clear outliers while accepting legitimate GPS variations
+- More principled than fixed distance threshold
+- Adapts to EKF uncertainty estimate
+"""
+
+# Scaling factors for tuning (multiply base Q and R matrices)
+EKF_Q_SCALE = 1.0
+"""Global scaling factor for process noise covariance Q.
+
+Larger values (>1) = trust model less, trust measurements more
+Smaller values (<1) = trust model more, trust measurements less
+
+Tuning rationale:
+- 1.0 is baseline using manually chosen Q values
+- Use parameter sweep to optimize this factor
+"""
+
+EKF_R_SCALE = 1.0
+"""Global scaling factor for GPS measurement noise covariance R.
+
+Larger values (>1) = trust GPS less, trust model more
+Smaller values (<1) = trust GPS more, trust model less
+
+Tuning rationale:
+- 1.0 is baseline using 3m GPS sigma
+- Use parameter sweep to optimize this factor
+"""
+
+
+# ============================================================================
 # Path Following Parameters (Pure Pursuit)
 # ============================================================================
 
@@ -163,15 +267,15 @@ Tuning rationale:
 # ============================================================================
 
 # Proportional gains
-MOTOR_KP_V = 0.5
+MOTOR_KP_V = 1.2
 """Proportional gain for linear velocity feedback (range: [0, 2]).
 
 Higher = more aggressive velocity correction.
 
 Tuning rationale:
-- 0.5 provides moderate correction without overshoot
-- Conservative to prioritize stability over fast convergence
-- Analysis showed aggressive gains (>1.0) caused oscillations
+- Iterative tuning: 0.5 → 0.9 → 1.1 (slightly slow) → 1.3 (too aggressive)
+- 1.3 caused degraded performance (overshoot/oscillations)
+- 1.2 is the sweet spot between 1.1 (good but slow) and 1.3 (too much)
 """
 
 MOTOR_KP_OMEGA = 0.5
@@ -185,16 +289,15 @@ Tuning rationale:
 """
 
 # Integral gains
-MOTOR_KI_V = 0.05
+MOTOR_KI_V = 0.18
 """Integral gain for linear velocity (range: [0, 0.5]).
 
 Eliminates steady-state velocity tracking error.
 
 Tuning rationale:
-- Optimized to 0.05 based on parameter sweep (32 configs × 10 runs)
-- Sweep result: Mean 10.13m, Std 1.86m (BEST consistency score: 13.86)
-- Lower integral gain provides excellent stability and consistency
-- Tightest distribution of all tested configurations
+- Iterative tuning: 0.05 → 0.12 → 0.16 (good) → 0.20 (too high, caused windup)
+- 0.18 balances fast error elimination without integral windup
+- Works with KP_V=1.2 for optimal velocity tracking
 """
 
 MOTOR_KI_OMEGA = 0.04
