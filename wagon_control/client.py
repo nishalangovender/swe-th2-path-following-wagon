@@ -22,13 +22,21 @@ import websockets
 from wagon_control import path
 from wagon_control.config import (
     FOLLOWER_BASE_LOOKAHEAD,
+    FOLLOWER_K_TEMPORAL,
     FOLLOWER_LOOKAHEAD_TIME,
+    FOLLOWER_MAX_TEMPORAL_ADJUSTMENT,
     # Control parameters
     LOCALIZER_VELOCITY_CORRECTION_GAIN,
+    MOTOR_KD_OMEGA,
+    MOTOR_KD_V,
+    MOTOR_KF_OMEGA,
+    MOTOR_KF_V,
     MOTOR_KI_OMEGA,
     MOTOR_KI_V,
     MOTOR_KP_OMEGA,
     MOTOR_KP_V,
+    MOTOR_OMEGA_COMPENSATION,
+    MOTOR_VELOCITY_COMPENSATION,
     PATH_DT,
     # Path configuration
     PATH_DURATION,
@@ -104,7 +112,7 @@ class WagonController:
     - Sensor data collection (IMU, GPS)
     - State estimation (localization)
     - Path following control (Pure Pursuit)
-    - Motor feedback control (PI controller)
+    - Motor feedback control (PID + acceleration feedforward)
     - Data logging to CSV files
 
     Attributes:
@@ -112,7 +120,7 @@ class WagonController:
         data_collector: Handles CSV file logging.
         localizer: State estimator (complementary filter).
         follower: Path follower (Pure Pursuit).
-        motor_controller: Velocity feedback controller (PI).
+        motor_controller: Velocity feedback controller (PID + feedforward).
         should_stop: Flag indicating whether to stop control loop.
     """
 
@@ -139,10 +147,22 @@ class WagonController:
         # Initialize control system components (using config parameters)
         self.localizer = WagonLocalizer(velocity_correction_gain=LOCALIZER_VELOCITY_CORRECTION_GAIN)
         self.follower = PurePursuitFollower(
-            lookahead_distance=FOLLOWER_BASE_LOOKAHEAD, lookahead_time=FOLLOWER_LOOKAHEAD_TIME
+            lookahead_distance=FOLLOWER_BASE_LOOKAHEAD,
+            lookahead_time=FOLLOWER_LOOKAHEAD_TIME,
+            k_temporal=FOLLOWER_K_TEMPORAL,
+            max_temporal_adjustment=FOLLOWER_MAX_TEMPORAL_ADJUSTMENT,
         )
         self.motor_controller = MotorController(
-            k_v=MOTOR_KP_V, k_omega=MOTOR_KP_OMEGA, k_i_v=MOTOR_KI_V, k_i_omega=MOTOR_KI_OMEGA
+            k_v=MOTOR_KP_V,
+            k_omega=MOTOR_KP_OMEGA,
+            k_i_v=MOTOR_KI_V,
+            k_i_omega=MOTOR_KI_OMEGA,
+            k_d_v=MOTOR_KD_V,
+            k_d_omega=MOTOR_KD_OMEGA,
+            k_f_v=MOTOR_KF_V,
+            k_f_omega=MOTOR_KF_OMEGA,
+            velocity_compensation=MOTOR_VELOCITY_COMPENSATION,
+            omega_compensation=MOTOR_OMEGA_COMPENSATION,
         )
 
         # Latest sensor readings (for IMU integration)
@@ -243,10 +263,12 @@ class WagonController:
             is_fresh_gps = self.last_gps_position is None or current_gps != self.last_gps_position
 
             if not self.initialized and is_fresh_gps:
-                # First fresh GPS reading - initialize localizer position
-                print(f"Initializing from first GPS: ({x:.4f}, {y:.4f})")
+                # Initialize localizer at origin (0, 0) as per problem specification
+                # The wagon always starts at (0, 0), so we ignore the first GPS reading
+                # which may be noisy and cause initialization errors
+                print(f"Initializing at origin (0.0, 0.0) - First GPS was: ({x:.4f}, {y:.4f})")
                 current_time = time.time()
-                self.localizer.update_gps(x, y, timestamp=current_time)
+                self.localizer.update_gps(0.0, 0.0, timestamp=current_time)
                 self.initialized = True
             elif self.initialized and is_fresh_gps:
                 # Normal GPS update after initialization
@@ -399,8 +421,8 @@ class WagonController:
                                         websocket, v_left=v_left, v_right=v_right
                                     )
                                 else:
-                                    # Compute reference commands using pure pursuit
-                                    v_ref, omega_ref = self.follower.compute_control(
+                                    # Compute reference commands using pure pursuit with acceleration feedforward
+                                    v_ref, omega_ref, a_ref, alpha_ref = self.follower.compute_control(
                                         state, self.path_x, self.path_y, self.path_t, current_time
                                     )
 
@@ -416,9 +438,9 @@ class WagonController:
                                     else:
                                         dt_motor = 0.05  # Default 50ms if first update
 
-                                    # Apply PI motor controller feedback
+                                    # Apply PI + feedforward motor controller
                                     v_cmd, omega_cmd = self.motor_controller.compute_control(
-                                        v_ref, omega_ref, v_loc, omega_loc, dt_motor
+                                        v_ref, omega_ref, v_loc, omega_loc, dt_motor, a_ref, alpha_ref
                                     )
 
                                     # Log motor controller data

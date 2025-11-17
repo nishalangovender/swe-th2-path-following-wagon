@@ -191,15 +191,18 @@ Tuning rationale:
 - Use parameter sweep to optimize this factor
 """
 
-EKF_R_SCALE = 1.0
+EKF_R_SCALE = 1.15
 """Global scaling factor for GPS measurement noise covariance R.
 
 Larger values (>1) = trust GPS less, trust model more
 Smaller values (<1) = trust GPS more, trust model less
 
 Tuning rationale:
-- 1.0 is baseline using 3m GPS sigma
-- Use parameter sweep to optimize this factor
+- Balanced at 1.15 for moderate GPS trust
+- Previous 1.3 was too high - wagon drifted too much without GPS corrections
+- 1.15 provides good balance: reduces GPS jumps without excessive drift
+- Prevents both position jumps (GPS too trusted) and drift (GPS not trusted enough)
+- Works with stable velocity tracking (KD_V=0.05, KI_V=0.14) for reliable localization
 """
 
 
@@ -219,15 +222,16 @@ Tuning rationale:
 - Too large (>1.5m) = cuts corners, poor path following
 """
 
-FOLLOWER_LOOKAHEAD_TIME = 0.9
+FOLLOWER_LOOKAHEAD_TIME = 0.8
 """Time-based lookahead gain for adaptive mode (seconds).
 
 Lookahead distance = FOLLOWER_LOOKAHEAD_TIME * |v| + FOLLOWER_LOOKAHEAD_OFFSET
 
 Tuning rationale:
-- Optimized to 0.9s based on parameter sweep (32 configs × 10 runs)
-- Sweep result: Mean 11.35m, Std 5.29m (ranked 5th overall)
-- Longer lookahead provides smoother path following with better consistency
+- Reduced from 0.9s to 0.8s for tighter, more responsive path tracking
+- Shorter lookahead reduces position errors and improves accuracy
+- Works better with conservative temporal feedback (K_TEMPORAL=0.10)
+- At typical speeds (0.5-1.0 m/s), lookahead is 0.7-1.1m (was 0.8-1.2m)
 - Provides velocity-proportional lookahead: faster → look further ahead
 """
 
@@ -261,13 +265,42 @@ Tuning rationale:
 - Keeps control responsive to path changes
 """
 
+FOLLOWER_K_TEMPORAL = 0.10
+"""Temporal error feedback gain (dimensionless, range: [0, 0.5]).
+
+Adds velocity adjustment to catch up when behind schedule or slow down when ahead.
+
+Velocity adjustment = K_TEMPORAL * temporal_error
+where temporal_error is in seconds (positive = behind, negative = ahead).
+
+Tuning rationale:
+- Reduced from 0.14 to 0.10 to prevent overcorrection when falling behind
+- Analysis of runs (7.43m-11.99m) showed temporal catch-up causing instability
+- Very conservative gain prevents temporal feedback from destabilizing system
+- Better to track spatially well than to aggressively chase temporal schedule
+- Works with KI_V=0.15, KD_V=0.05 for stable, consistent tracking
+"""
+
+FOLLOWER_MAX_TEMPORAL_ADJUSTMENT = 0.4
+"""Maximum velocity adjustment from temporal error feedback (m/s).
+
+Safety limit to prevent excessive velocity corrections.
+
+Tuning rationale:
+- Reduced from 0.5 to 0.4 m/s for more conservative corrections
+- Lower limit prevents temporal feedback from causing large velocity swings
+- With K_TEMPORAL=0.10, typical adjustments are ~0.1-0.2 m/s
+- Safety margin prevents rare large errors from destabilizing the system
+- Prioritizes stability over aggressive temporal tracking
+"""
+
 
 # ============================================================================
 # Motor Controller Parameters (PI Feedback)
 # ============================================================================
 
 # Proportional gains
-MOTOR_KP_V = 1.2
+MOTOR_KP_V = 1.0
 """Proportional gain for linear velocity feedback (range: [0, 2]).
 
 Higher = more aggressive velocity correction.
@@ -275,7 +308,10 @@ Higher = more aggressive velocity correction.
 Tuning rationale:
 - Iterative tuning: 0.5 → 0.9 → 1.1 (slightly slow) → 1.3 (too aggressive)
 - 1.3 caused degraded performance (overshoot/oscillations)
-- 1.2 is the sweet spot between 1.1 (good but slow) and 1.3 (too much)
+- Original 1.2 was optimal for PI-only control
+- Reduced to 0.9 after adding feedforward to prevent overshoot
+- Increased to 1.0 for PID+FF to handle 160ms system lag
+- Works with KD=0.1 (damping) and KF=1.0 (anticipation) for balanced control
 """
 
 MOTOR_KP_OMEGA = 0.5
@@ -289,15 +325,18 @@ Tuning rationale:
 """
 
 # Integral gains
-MOTOR_KI_V = 0.18
+MOTOR_KI_V = 0.15
 """Integral gain for linear velocity (range: [0, 0.5]).
 
 Eliminates steady-state velocity tracking error.
 
 Tuning rationale:
-- Iterative tuning: 0.05 → 0.12 → 0.16 (good) → 0.20 (too high, caused windup)
-- 0.18 balances fast error elimination without integral windup
-- Works with KP_V=1.2 for optimal velocity tracking
+- Iterative tuning: 0.05 → 0.12 → 0.15 → 0.13 → 0.14 → 0.15 (optimized)
+- Increased from 0.14 to 0.15 for better steady-state velocity tracking
+- Stronger integral action prevents wagon from consistently running slow
+- Reduced temporal gain (K_TEMPORAL=0.10) means less catch-up, so need better baseline tracking
+- Provides aggressive error elimination while KD_V=0.05 prevents overshoot
+- Works with KP_V=1.0, KD_V=0.05, KF_V=1.0 for stable PID+FF control
 """
 
 MOTOR_KI_OMEGA = 0.04
@@ -312,6 +351,64 @@ Tuning rationale:
 - Prevents heading oscillations and integral windup during turns
 """
 
+# Feedforward gains
+MOTOR_KF_V = 1.0
+"""Feedforward gain for linear velocity acceleration (dimensionless, range: [0, 1]).
+
+Anticipates required accelerations from path to reduce tracking lag.
+
+Feedforward term: v_ff = Kf * a_ref
+where a_ref is the reference acceleration computed from velocity profile.
+
+Tuning rationale:
+- Initial 0.3 was too conservative - wagon achieved only 77% of commanded velocity
+- Increased to 0.7 (70% feedforward authority) but still had 160ms lag
+- Increased to 1.0 (100% feedforward authority) for maximum anticipation
+- At max path acceleration (0.256 m/s²), contributes 0.256 m/s anticipation
+- Works with PID (KP=1.0, KI=0.12, KD=0.1) for full predictive + reactive control
+- Derivative term (KD=0.1) prevents overshoot from aggressive feedforward
+"""
+
+MOTOR_KF_OMEGA = 0.0
+"""Feedforward gain for angular acceleration (dimensionless, range: [0, 1]).
+
+Currently disabled (0.0) - focusing on linear velocity feedforward first.
+
+Tuning rationale:
+- Angular control is already performing well with PI alone
+- Linear velocity tracking is the primary bottleneck
+- Can enable later if angular tracking needs improvement
+"""
+
+# Derivative gains
+MOTOR_KD_V = 0.05
+"""Derivative gain for linear velocity (dimensionless, range: [0, 0.5]).
+
+Provides damping and reduces transient response lag.
+
+Derivative term: v_d = -Kd * d(error)/dt
+
+Tuning rationale:
+- Reduced from 0.15 to 0.05 after observing instability (scores 11.02m, 27.80m)
+- KD=0.15 was amplifying sensor noise causing cascading instability
+- Conservative damping prevents derivative kick and noise amplification
+- Lower gain provides gentle damping without destabilizing the system
+- Works with KP=1.0, KI=0.14, KF=1.0 for stable PID+FF control
+"""
+
+MOTOR_KD_OMEGA = 0.0
+"""Derivative gain for angular velocity (dimensionless, range: [0, 0.5]).
+
+Currently disabled (0.0) - caused instability when enabled.
+
+Tuning rationale:
+- Disabled after KD_OMEGA=0.08 caused angular instability (runs 11.02m, 27.80m)
+- Derivative term amplified gyro noise → wild angular oscillations → heading loss
+- PI control alone (KP=0.5, KI=0.04) provides sufficient angular tracking
+- Angular control doesn't need derivative damping - it creates more problems
+- System stable with linear derivative only (KD_V=0.05)
+"""
+
 # Anti-windup limit
 MOTOR_INTEGRAL_LIMIT = 0.5
 """Anti-windup limit for integral terms (meters/second or radians/second).
@@ -321,6 +418,32 @@ Clamps integral accumulation to prevent large overshoots.
 Tuning rationale:
 - 0.5 limit prevents excessive integral buildup
 - Allows reasonable correction without destabilizing control
+"""
+
+# Velocity compensation factors
+MOTOR_VELOCITY_COMPENSATION = 1.08
+"""Velocity compensation factor for actuator response lag (dimensionless, range: [1.0, 1.2]).
+
+Compensates for systematic velocity tracking deficit.
+
+Compensation: v_cmd_final = v_cmd_pid * compensation_factor
+
+Tuning rationale:
+- Set to 1.08 (8% boost) to prevent wagon from falling behind
+- Temporal feedback reduced (K_TEMPORAL=0.10), so need better baseline velocity tracking
+- Compensates for actuator lag, friction, and torque limits
+- Prevents systematic underspeed that accumulates temporal lag
+- Works with KI_V=0.15 and KD_V=0.05 for consistent velocity tracking
+"""
+
+MOTOR_OMEGA_COMPENSATION = 1.0
+"""Angular velocity compensation factor (dimensionless, range: [1.0, 1.2]).
+
+Currently disabled (1.0) - angular tracking is adequate.
+
+Tuning rationale:
+- Angular velocity tracking performs well without compensation
+- Can increase if analysis shows omega tracking deficit
 """
 
 

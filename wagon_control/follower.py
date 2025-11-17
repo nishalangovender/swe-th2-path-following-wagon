@@ -27,6 +27,8 @@ class PurePursuitFollower:
         lookahead_offset: float = 0.3,
         min_lookahead: float = 0.5,
         max_lookahead: float = 2.0,
+        k_temporal: float = 0.18,
+        max_temporal_adjustment: float = 0.5,
     ):
         """Initialize the pure pursuit controller.
 
@@ -39,6 +41,10 @@ class PurePursuitFollower:
             lookahead_offset: Minimum base lookahead (meters). Default: 0.3.
             min_lookahead: Minimum lookahead distance (meters). Default: 0.5.
             max_lookahead: Maximum lookahead distance (meters). Default: 2.0.
+            k_temporal: Temporal error feedback gain. Default: 0.18.
+                Adds velocity adjustment to catch up if behind schedule.
+            max_temporal_adjustment: Maximum velocity adjustment from temporal
+                error (m/s). Default: 0.5. Prevents excessive corrections.
         """
         self.base_lookahead_distance = lookahead_distance
         self.adaptive = adaptive
@@ -46,6 +52,8 @@ class PurePursuitFollower:
         self.lookahead_offset = lookahead_offset
         self.min_lookahead = min_lookahead
         self.max_lookahead = max_lookahead
+        self.k_temporal = k_temporal
+        self.max_temporal_adjustment = max_temporal_adjustment
         self.lookahead_distance = lookahead_distance  # Will be updated if adaptive
         self.start_time: Optional[float] = None  # Start time for trajectory following
 
@@ -140,6 +148,44 @@ class PurePursuitFollower:
         idx = int(np.argmin(np.abs(path_t - target_time)))
         return idx
 
+    def compute_temporal_error(
+        self,
+        current_x: float,
+        current_y: float,
+        path_x: np.ndarray,
+        path_y: np.ndarray,
+        path_t: np.ndarray,
+        ref_idx: int,
+    ) -> float:
+        """Compute temporal error: how far behind/ahead we are on the path.
+
+        Positive error means we are behind schedule (should speed up).
+        Negative error means we are ahead of schedule (should slow down).
+
+        Args:
+            current_x: Current x position (m)
+            current_y: Current y position (m)
+            path_x: Array of path x coordinates
+            path_y: Array of path y coordinates
+            path_t: Array of path time values
+            ref_idx: Index where we SHOULD be based on time
+
+        Returns:
+            Temporal error in seconds (positive = behind, negative = ahead)
+        """
+        # Find where we actually are on the path
+        closest_idx = self.find_closest_point(current_x, current_y, path_x, path_y)
+
+        # Compute temporal error as time difference
+        # ref_idx is where we should be, closest_idx is where we are
+        # If ref_idx > closest_idx, we're behind (positive error)
+        if 0 <= closest_idx < len(path_t) and 0 <= ref_idx < len(path_t):
+            temporal_error = path_t[ref_idx] - path_t[closest_idx]
+        else:
+            temporal_error = 0.0
+
+        return temporal_error
+
     def compute_reference_velocity(
         self, path_x: np.ndarray, path_y: np.ndarray, path_t: np.ndarray, ref_idx: int
     ) -> float:
@@ -171,6 +217,44 @@ class PurePursuitFollower:
         else:
             return 0.0
 
+    def compute_reference_acceleration(
+        self, path_x: np.ndarray, path_y: np.ndarray, path_t: np.ndarray, ref_idx: int
+    ) -> float:
+        """Compute reference acceleration from velocity profile time derivatives.
+
+        Uses finite differences on velocity to estimate acceleration for feedforward control.
+
+        Args:
+            path_x: Array of path x coordinates
+            path_y: Array of path y coordinates
+            path_t: Array of path time values
+            ref_idx: Index of reference position on path (based on time)
+
+        Returns:
+            Reference acceleration (m/s²)
+        """
+        # Need at least 2 future points for velocity finite difference
+        if ref_idx >= len(path_x) - 2:
+            # Near end of path, deceleration to zero
+            return 0.0
+
+        # Compute velocity at current reference point
+        v_curr = self.compute_reference_velocity(path_x, path_y, path_t, ref_idx)
+
+        # Compute velocity at next reference point
+        v_next = self.compute_reference_velocity(path_x, path_y, path_t, ref_idx + 1)
+
+        # Time difference
+        dt = path_t[ref_idx + 1] - path_t[ref_idx]
+
+        if dt > 0:
+            # Forward difference for acceleration
+            a_ref = (v_next - v_curr) / dt
+            # Clamp to hardware acceleration limits
+            return float(max(-1.0, min(1.0, a_ref)))
+        else:
+            return 0.0
+
     def compute_control(
         self,
         state: dict,
@@ -178,7 +262,7 @@ class PurePursuitFollower:
         path_y: np.ndarray,
         path_t: np.ndarray,
         current_time: float,
-    ) -> Tuple[float, float]:
+    ) -> Tuple[float, float, float, float]:
         """Compute velocity commands using pure pursuit algorithm.
 
         Args:
@@ -192,9 +276,11 @@ class PurePursuitFollower:
             current_time: Current timestamp (seconds)
 
         Returns:
-            Tuple of (v_cmd, omega_cmd) where:
+            Tuple of (v_cmd, omega_cmd, a_ref, alpha_ref) where:
                 v_cmd: Linear velocity command (m/s)
                 omega_cmd: Angular velocity command (rad/s)
+                a_ref: Linear acceleration reference for feedforward (m/s²)
+                alpha_ref: Angular acceleration reference for feedforward (rad/s²)
         """
         # Extract state components
         current_x = state["x"]
@@ -213,6 +299,27 @@ class PurePursuitFollower:
 
         # Compute reference velocity from path at reference time
         v_cmd = self.compute_reference_velocity(path_x, path_y, path_t, ref_idx)
+
+        # Compute temporal error (how far behind/ahead we are)
+        temporal_error = self.compute_temporal_error(
+            current_x, current_y, path_x, path_y, path_t, ref_idx
+        )
+
+        # Add velocity adjustment based on temporal error to catch up if behind
+        # Positive temporal_error = behind schedule → increase velocity
+        # Negative temporal_error = ahead of schedule → decrease velocity
+        v_adjustment = self.k_temporal * temporal_error
+
+        # Clamp adjustment to prevent excessive corrections
+        v_adjustment = max(
+            -self.max_temporal_adjustment, min(self.max_temporal_adjustment, v_adjustment)
+        )
+
+        # Apply temporal feedback to velocity command
+        v_cmd += v_adjustment
+
+        # Compute reference acceleration for feedforward control
+        a_ref = self.compute_reference_acceleration(path_x, path_y, path_t, ref_idx)
 
         # Update lookahead distance based on reference velocity (adaptive)
         self.lookahead_distance = self.compute_adaptive_lookahead(v_cmd)
@@ -242,4 +349,7 @@ class PurePursuitFollower:
             # At goal, no rotation needed
             omega_cmd = 0.0
 
-        return v_cmd, omega_cmd
+        # Angular acceleration reference (currently unused, set to 0)
+        alpha_ref = 0.0
+
+        return v_cmd, omega_cmd, a_ref, alpha_ref
