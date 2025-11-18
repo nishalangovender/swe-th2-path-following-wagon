@@ -7,9 +7,11 @@ collected from the wagon control system.
 
 import csv
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.animation import FuncAnimation
@@ -60,6 +62,7 @@ class LivePlotter:
         self.tracking_path = run_dir / "tracking_metrics.csv"
         self.score_path = run_dir / "score.txt"
         self.update_interval = update_interval
+        self.anim = None  # Animation object (kept as instance variable to prevent garbage collection)
 
         # Create figure with subplots - dark mode (improved 2-row layout)
         self.fig = plt.figure(figsize=(18, 10), facecolor=MONUMENTAL_DARK_BLUE)
@@ -96,7 +99,7 @@ class LivePlotter:
 
         # Time-based reference trajectory (REF - what controller should follow)
         (self.ref_line,) = self.ax_gps.plot(
-            [], [], "-", color=MONUMENTAL_BLUE, linewidth=2.0, alpha=0.8, label="REF (planned)"
+            [], [], "-", color=MONUMENTAL_BLUE, linewidth=2.0, alpha=0.8, label="REF"
         )
 
         # GPS trajectory (sparse 1 Hz measurements)
@@ -108,12 +111,12 @@ class LivePlotter:
             linewidth=1.0,
             alpha=0.6,
             markersize=4,
-            label="GPS (1 Hz)",
+            label="GPS",
         )
 
         # Localized trajectory (dense 20 Hz estimated path)
         (self.loc_line,) = self.ax_gps.plot(
-            [], [], "-", color="#00ff00", linewidth=1.5, alpha=0.7, label="LOC (odom)"
+            [], [], "-", color="#00ff00", linewidth=1.5, alpha=0.7, label="LOC"
         )
 
         # Start marker
@@ -130,21 +133,12 @@ class LivePlotter:
         )
 
         # Diagnostic plot line objects
-        # Heading error plot (primary axis - error in degrees)
-        (self.heading_error_line,) = self.ax_heading_error.plot(
-            [], [], color=MONUMENTAL_ORANGE, linewidth=2, alpha=0.8, label="Error"
+        # Heading comparison plot
+        (self.heading_ref_line,) = self.ax_heading_error.plot(
+            [], [], color=MONUMENTAL_BLUE, linewidth=2, alpha=0.8, label="Heading (θ)"
         )
-        (self.heading_error_mean,) = self.ax_heading_error.plot(
-            [], [], "--", color=MONUMENTAL_ORANGE, linewidth=1.5, alpha=0.5, label="Mean Error"
-        )
-
-        # Create twin axis for absolute heading values
-        self.ax_heading_values = self.ax_heading_error.twinx()
-        (self.heading_ref_line,) = self.ax_heading_values.plot(
-            [], [], color=MONUMENTAL_BLUE, linewidth=1.5, alpha=0.7, label="REF"
-        )
-        (self.heading_loc_line,) = self.ax_heading_values.plot(
-            [], [], color=MONUMENTAL_YELLOW_ORANGE, linewidth=1.5, alpha=0.7, label="LOC"
+        (self.heading_loc_line,) = self.ax_heading_error.plot(
+            [], [], color=MONUMENTAL_YELLOW_ORANGE, linewidth=2, alpha=0.8, label="Reference (θ_ref)"
         )
 
         (self.position_error_x_line,) = self.ax_position_errors.plot(
@@ -153,28 +147,25 @@ class LivePlotter:
         (self.position_error_y_line,) = self.ax_position_errors.plot(
             [], [], color=MONUMENTAL_BLUE, linewidth=1.5, alpha=0.8, label="Y Error"
         )
-        (self.slip_magnitude_line,) = self.ax_position_errors.plot(
-            [], [], color="#00ff00", linewidth=2, alpha=0.9, label="Slip (m/s²)"
-        )
 
         (self.velocity_ref_line,) = self.ax_velocity.plot(
-            [], [], color=MONUMENTAL_BLUE, linewidth=2, alpha=0.7, label="REF (path follower)"
+            [], [], color=MONUMENTAL_BLUE, linewidth=2, alpha=0.7, label="REF"
         )
         (self.velocity_cmd_line,) = self.ax_velocity.plot(
-            [], [], color=MONUMENTAL_YELLOW_ORANGE, linewidth=2, alpha=0.8, label="CMD (motor ctrl)"
+            [], [], color=MONUMENTAL_YELLOW_ORANGE, linewidth=2, alpha=0.8, label="CMD"
         )
         (self.velocity_loc_line,) = self.ax_velocity.plot(
-            [], [], color=MONUMENTAL_ORANGE, linewidth=1.5, alpha=0.7, label="LOC (actual)"
+            [], [], color=MONUMENTAL_ORANGE, linewidth=1.5, alpha=0.7, label="LOC"
         )
 
         (self.angular_velocity_ref_line,) = self.ax_angular_velocity.plot(
-            [], [], color=MONUMENTAL_BLUE, linewidth=2, alpha=0.7, label="REF (path follower)"
+            [], [], color=MONUMENTAL_BLUE, linewidth=2, alpha=0.7, label="REF"
         )
         (self.angular_velocity_cmd_line,) = self.ax_angular_velocity.plot(
-            [], [], color=MONUMENTAL_YELLOW_ORANGE, linewidth=2, alpha=0.8, label="CMD (motor ctrl)"
+            [], [], color=MONUMENTAL_YELLOW_ORANGE, linewidth=2, alpha=0.8, label="CMD"
         )
         (self.angular_velocity_loc_line,) = self.ax_angular_velocity.plot(
-            [], [], color=MONUMENTAL_ORANGE, linewidth=1.5, alpha=0.7, label="LOC (actual)"
+            [], [], color=MONUMENTAL_ORANGE, linewidth=1.5, alpha=0.7, label="LOC"
         )
 
         # Add text display for tracking metrics above trajectory plot
@@ -201,13 +192,12 @@ class LivePlotter:
 
     def _setup_axes(self) -> None:
         """Configure plot axes with labels and styling - dark mode."""
-        # Apply dark mode styling to all axes (including twin axis)
+        # Apply dark mode styling to all axes
         all_axes = [
             self.ax_gps,
             self.ax_velocity,
             self.ax_angular_velocity,
             self.ax_heading_error,
-            self.ax_heading_values,
             self.ax_position_errors,
         ]
         for ax in all_axes:
@@ -270,27 +260,12 @@ class LivePlotter:
 
         # Heading Error plot (dual axis: error + absolute values)
         self.ax_heading_error.set_xlabel("Time (s)", fontsize=9)
-        self.ax_heading_error.set_ylabel("Error (°)", fontsize=10, color=MONUMENTAL_ORANGE)
-        self.ax_heading_error.set_title(
-            "Heading: θ (REF vs LOC + Error)", fontsize=10, fontweight="bold"
-        )
+        self.ax_heading_error.set_ylabel("Heading (°)", fontsize=10)
+        self.ax_heading_error.set_title("Heading", fontsize=10, fontweight="bold")
         self.ax_heading_error.grid(True, alpha=0.2, color=MONUMENTAL_CREAM)
-        self.ax_heading_error.axhline(y=0, color=MONUMENTAL_CREAM, linestyle="--", alpha=0.3)
-        self.ax_heading_error.tick_params(axis="y", labelcolor=MONUMENTAL_ORANGE)
 
-        # Configure twin axis for absolute heading values
-        self.ax_heading_values.set_ylabel("Heading (°)", fontsize=10, color=MONUMENTAL_BLUE)
-        self.ax_heading_values.spines["right"].set_color(MONUMENTAL_CREAM)
-        self.ax_heading_values.tick_params(axis="y", colors=MONUMENTAL_BLUE)
-
-        # Combined legend for both axes
-        lines_error = [self.heading_error_line, self.heading_error_mean]
-        lines_values = [self.heading_ref_line, self.heading_loc_line]
-        labels_error = [line.get_label() for line in lines_error]
-        labels_values = [line.get_label() for line in lines_values]
+        # Legend for heading plot
         legend = self.ax_heading_error.legend(
-            lines_error + lines_values,
-            labels_error + labels_values,
             loc="upper right",
             fontsize=8,
             facecolor=MONUMENTAL_DARK_BLUE,
@@ -486,7 +461,7 @@ class LivePlotter:
         Returns:
             Dictionary with keys: 'timestamp', 'P_trace', 'P_px', 'P_py', 'P_theta',
             'P_v', 'P_b_g', 'innovation_norm', 'mahalanobis', 'gyro_bias',
-            'outliers_rejected', 'slip_magnitude'
+            'outliers_rejected'
             or None if file doesn't exist or can't be parsed.
         """
         try:
@@ -508,7 +483,6 @@ class LivePlotter:
                     "mahalanobis": [],
                     "gyro_bias": [],
                     "outliers_rejected": [],
-                    "slip_magnitude": [],
                 }
                 for row in reader:
                     try:
@@ -523,7 +497,6 @@ class LivePlotter:
                         data["mahalanobis"].append(float(row["mahalanobis"]))
                         data["gyro_bias"].append(float(row["gyro_bias"]))
                         data["outliers_rejected"].append(float(row["outliers_rejected"]))
-                        data["slip_magnitude"].append(float(row["slip_magnitude"]))
                     except (ValueError, KeyError):
                         continue
 
@@ -561,13 +534,10 @@ class LivePlotter:
             self.gps_line,
             self.loc_line,
             self.traj_start,
-            self.heading_error_line,
-            self.heading_error_mean,
             self.heading_ref_line,
             self.heading_loc_line,
             self.position_error_x_line,
             self.position_error_y_line,
-            self.slip_magnitude_line,
             self.velocity_ref_line,
             self.velocity_cmd_line,
             self.velocity_loc_line,
@@ -623,36 +593,25 @@ class LivePlotter:
 
             if tracking_data is not None and len(tracking_data["cumulative_l2_error"]) > 0:
                 # Get latest metrics
-                est_l2 = tracking_data["cumulative_l2_error"][-1]
+                # est_l2_cumulative = localization-based estimate (cumulative sum)
+                # final_score = server result (ground truth)
+                est_l2_cumulative = tracking_data["cumulative_l2_error"][-1]
                 est_avg_mm = tracking_data["avg_sample_error_mm"][-1]
-                sample_count = int(tracking_data["sample_count"][-1])
+                # LOC L2 comparable 20s value (divide cumulative by 20)
+                est_l2_20s = est_l2_cumulative / 20.0
 
-                # Build metrics text
-                metrics_lines = [
-                    "=== TRACKING METRICS ===",
-                    f"Est. L2: {est_l2:.3f}m",
-                    f"Est. Avg: {est_avg_mm:.1f}mm/sample",
-                    f"Samples: {sample_count}",
-                ]
-
-                # Add final score if available
+                # Build simplified metrics text
                 if final_score is not None:
                     system_avg_mm = (final_score / 20.0) * 1000.0
                     diff_mm = abs(est_avg_mm - system_avg_mm)
-                    metrics_lines.extend([
-                        "",
-                        "=== FINAL SCORE ===",
-                        f"System L2: {final_score:.3f}m",
-                        f"System Avg: {system_avg_mm:.1f}mm/sample",
-                        "",
-                        f"Difference: {diff_mm:.1f}mm/sample",
-                    ])
-
-                    # Add quality indicator
-                    if diff_mm < 10.0:
-                        metrics_lines.append("✓ LOC GOOD")
-                    else:
-                        metrics_lines.append("⚠ LOC NEEDS TUNING")
+                    metrics_lines = [
+                        f"L2: {final_score:.3f}m  Avg: {system_avg_mm:.1f}mm",
+                        f"LOC L2: {est_l2_20s:.3f}m  LOC Avg: {est_avg_mm:.1f}mm  Diff: {diff_mm:.1f}mm"
+                    ]
+                else:
+                    metrics_lines = [
+                        f"LOC L2: {est_l2_20s:.3f}m  LOC Avg: {est_avg_mm:.1f}mm",
+                    ]
 
                 self.metrics_text.set_text("\n".join(metrics_lines))
             else:
@@ -778,37 +737,17 @@ class LivePlotter:
 
             relative_times = ref_data["elapsed_time"]
 
-            # Update Heading Error plot (primary axis)
-            self.heading_error_line.set_data(relative_times, error_theta_deg)
-            if len(error_theta_deg) > 0:
-                mean_heading_error = np.mean(error_theta_deg)
-                self.heading_error_mean.set_data(
-                    [relative_times[0], relative_times[-1]],
-                    [mean_heading_error, mean_heading_error],
-                )
-            self.ax_heading_error.relim()
-            self.ax_heading_error.autoscale_view()
-
-            # Update Heading Values (twin axis) - convert to degrees
+            # Update Heading plot - convert to degrees
             theta_ref_deg = np.degrees(ref_data["theta_ref"])
             theta_loc_deg = np.degrees(state_data["theta_loc"])
             self.heading_ref_line.set_data(relative_times, theta_ref_deg)
             self.heading_loc_line.set_data(relative_times, theta_loc_deg)
-            self.ax_heading_values.relim()
-            self.ax_heading_values.autoscale_view()
+            self.ax_heading_error.relim()
+            self.ax_heading_error.autoscale_view()
 
             # Update Position X/Y Errors plot
             self.position_error_x_line.set_data(relative_times, error_x)
             self.position_error_y_line.set_data(relative_times, error_y)
-
-            # Load and plot slip magnitude
-            ekf_data = self._load_ekf_diagnostics()
-            if ekf_data is not None and len(ekf_data["slip_magnitude"]) > 0:
-                # Align EKF diagnostics timestamps with relative times
-                min_ekf_len = min(len(ekf_data["slip_magnitude"]), len(relative_times))
-                self.slip_magnitude_line.set_data(
-                    relative_times[:min_ekf_len], ekf_data["slip_magnitude"][:min_ekf_len]
-                )
 
             self.ax_position_errors.relim()
             self.ax_position_errors.autoscale_view()
@@ -840,41 +779,68 @@ class LivePlotter:
         self.fig.savefig(save_path, dpi=150, facecolor=self.fig.get_facecolor())
         logging.debug(f"Saved live plot snapshot to: {save_path}")
 
-    def start(self, auto_save: bool = False) -> None:
+    def start(self, auto_save: bool = False, show: bool = True) -> None:
         """Start the live plotting animation.
 
         Args:
             auto_save: If True, save a snapshot when the plot window is closed.
+            show: If True, display the plot window. If False, run headless.
 
-        Blocks until the plot window is closed.
+        Blocks until the plot window is closed (if show=True) or updates complete (if show=False).
         """
-        # Create animation
-        anim = FuncAnimation(
-            self.fig,
-            self._update,
-            interval=self.update_interval,
-            blit=False,
-            cache_frame_data=False,
-        )
+        if show:
+            # Interactive mode - create animation and show plot
+            self.anim = FuncAnimation(
+                self.fig,
+                self._update,
+                interval=self.update_interval,
+                blit=False,
+                cache_frame_data=False,
+            )
+            plt.show()
+        else:
+            # Headless mode - manually update plots until data collection completes
+            # Don't create animation in headless mode (avoids warning about unused animation)
+            import time
+            score_file = self.run_dir / "score.txt"
+            max_wait_time = 60  # Maximum 60 seconds
+            elapsed = 0
 
-        # Show plot
-        plt.show()
+            try:
+                while elapsed < max_wait_time:
+                    # Manually call update function
+                    self._update(0)
 
-        # Save snapshot after window is closed if requested
+                    time.sleep(0.5)
+                    elapsed += 0.5
+
+                    # Check if score file exists (run is complete)
+                    if score_file.exists():
+                        # Give it a moment to finish writing final data
+                        time.sleep(1)
+                        # Do final updates to capture all data
+                        for _ in range(5):
+                            self._update(0)
+                        break
+            except KeyboardInterrupt:
+                pass
+
+        # Save snapshot if requested
         if auto_save:
             self.save_snapshot()
 
 
-def start_live_plot(run_dir: Path, update_interval: int = 500, auto_save: bool = False) -> None:
+def start_live_plot(run_dir: Path, update_interval: int = 500, auto_save: bool = False, show: bool = True) -> None:
     """Start a live plotting session for a run directory.
 
     Args:
         run_dir: Directory containing CSV files to monitor.
         update_interval: Update interval in milliseconds (default: 500ms).
         auto_save: If True, save a snapshot when the plot window is closed.
+        show: If True, display the plot window. If False, run headless.
     """
     plotter = LivePlotter(run_dir, update_interval)
-    plotter.start(auto_save=auto_save)
+    plotter.start(auto_save=auto_save, show=show)
 
 
 if __name__ == "__main__":
@@ -884,16 +850,21 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     if len(sys.argv) < 2:
-        logging.error("Usage: python -m wagon_control.live_plot <run_directory> [--save]")
+        logging.error("Usage: python -m wagon_control.live_plot <run_directory> [--save] [--no-show]")
         sys.exit(1)
+
+    # Check for flags
+    auto_save = "--save" in sys.argv
+    no_show = "--no-show" in sys.argv
+
+    # Use non-interactive backend if --no-show is specified
+    if no_show:
+        matplotlib.use('Agg')
 
     run_dir = Path(sys.argv[1])
     if not run_dir.exists():
         logging.error(f"Error: Directory not found: {run_dir}")
         sys.exit(1)
 
-    # Check for --save flag
-    auto_save = "--save" in sys.argv
-
     logging.info(f"{TERM_BLUE}✓ Starting live plot for: results/{run_dir.name}{TERM_RESET}")
-    start_live_plot(run_dir, auto_save=auto_save)
+    start_live_plot(run_dir, auto_save=auto_save, show=not no_show)

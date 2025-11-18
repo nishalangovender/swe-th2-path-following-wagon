@@ -310,28 +310,15 @@ class WagonController:
             if self.sample_count > 0:
                 est_avg_mm = (self.cumulative_l2_error / self.sample_count) * 1000.0
                 est_l2_error = self.cumulative_l2_error
+                # LOC L2 comparable 20s value (divide cumulative by 20)
+                est_l2_20s = est_l2_error / 20.0
+                diff_mm = abs(est_avg_mm - system_avg_mm)
 
-                # Display results with comparison
-                logging.info(f"\n{TERM_BLUE}\033[1m=== FINAL RESULTS ==={TERM_RESET}")
-                logging.info(f"{TERM_BLUE}\033[1m✓ System Score (Ground Truth):{TERM_RESET}")
-                logging.info(f"{TERM_BLUE}  L2 Error: {score:.3f}m{TERM_RESET}")
-                logging.info(f"{TERM_BLUE}  Avg per sample: {system_avg_mm:.1f}mm{TERM_RESET}")
-                logging.info(f"\n{TERM_BLUE}\033[1m✓ Estimated (Based on Localization):{TERM_RESET}")
-                logging.info(f"{TERM_BLUE}  Cumulative L2: {est_l2_error:.3f}m (sum of {self.sample_count} samples){TERM_RESET}")
-                logging.info(f"{TERM_BLUE}  Avg per sample: {est_avg_mm:.1f}mm{TERM_RESET}")
-                logging.info(f"\n{TERM_BLUE}\033[1m✓ Comparison:{TERM_RESET}")
-                logging.info(f"{TERM_BLUE}  Difference: {abs(est_avg_mm - system_avg_mm):.1f}mm per sample{TERM_RESET}")
-
-                # Interpretation guidance
-                if abs(est_avg_mm - system_avg_mm) < 10.0:
-                    logging.info(f"{TERM_BLUE}  → Localization is GOOD - estimates match ground truth closely{TERM_RESET}")
-                    logging.info(f"{TERM_BLUE}  → Focus on tuning control parameters{TERM_RESET}")
-                else:
-                    logging.info(f"{TERM_BLUE}  → Localization may need tuning - significant difference detected{TERM_RESET}")
-                    logging.info(f"{TERM_BLUE}  → Consider adjusting EKF matrices or sensor fusion{TERM_RESET}")
+                # Display simplified results
+                logging.info(f"{TERM_BLUE}\033[1m→ L2: {score:.3f}m  Avg: {system_avg_mm:.1f}mm{TERM_RESET}")
+                logging.info(f"{TERM_BLUE}\033[1m→ LOC L2: {est_l2_20s:.3f}m  LOC Avg: {est_avg_mm:.1f}mm  Diff: {diff_mm:.1f}mm{TERM_RESET}")
             else:
-                logging.info(f"{TERM_BLUE}\033[1m✓ Received score: {score:.3f}m (L2 error)\033[0m{TERM_RESET}")
-                logging.info(f"{TERM_BLUE}\033[1m  → Average tracking error: {system_avg_mm:.1f}mm per sample\033[0m{TERM_RESET}")
+                logging.info(f"{TERM_BLUE}\033[1m→ L2: {score:.3f}m  Avg: {system_avg_mm:.1f}mm{TERM_RESET}")
 
             self.should_stop = True
         else:

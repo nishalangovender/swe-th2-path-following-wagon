@@ -203,25 +203,54 @@ fi
 
 # Run data collection unless --plot-only is specified
 if [ "$PLOT_ONLY" = false ]; then
-    echo -e "${ORANGE}=================================${NC}"
-    echo -e "${ORANGE}3. Starting Wagon Control System${NC}"
-    echo -e "${ORANGE}=================================${NC}"
-    if [ -n "$VERBOSE" ]; then
-        echo -e "${CREAM}Running in verbose mode${NC}"
-    fi
-
     # Run the wagon control system NUM_RUNS times
     for ((run=1; run<=NUM_RUNS; run++)); do
         if [ "$NUM_RUNS" -gt 1 ]; then
+            if [ "$run" -eq 1 ]; then
+                echo -e "${ORANGE}================================${NC}"
+                echo -e "${ORANGE}2. Starting Live Visualization${NC}"
+                echo -e "${ORANGE}================================${NC}"
+            fi
             echo -e "${ORANGE}--- Run $run of $NUM_RUNS ---${NC}"
-        fi
 
-        # Run the wagon control system
-        if [ -n "$RUN_DIR" ]; then
-            # Pass run directory to client for live plotting
-            RUN_DIR="$RUN_DIR" python -m wagon_control.client $VERBOSE
+            # Create run directory for this specific run
+            TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+            CURRENT_RUN_DIR="results/run_${TIMESTAMP}"
+            mkdir -p "$CURRENT_RUN_DIR"
+
+            # Create empty CSV files for live plotter
+            echo "timestamp,x,y" > "$CURRENT_RUN_DIR/gps_data.csv"
+            echo "timestamp,x_dot,y_dot,theta_dot" > "$CURRENT_RUN_DIR/imu_data.csv"
+
+            # Start live plotter for this run in headless mode (no window)
+            python -m wagon_control.live_plot "$CURRENT_RUN_DIR" --save --no-show &
+            CURRENT_LIVE_PLOT_PID=$!
+            sleep 1
+
+            if [ "$run" -eq 1 ]; then
+                echo -e "${ORANGE}=================================${NC}"
+                echo -e "${ORANGE}3. Starting Wagon Control System${NC}"
+                echo -e "${ORANGE}=================================${NC}"
+            fi
+
+            # Run the wagon control system with this run directory
+            RUN_DIR="$CURRENT_RUN_DIR" python -m wagon_control.client $VERBOSE
+
+            # Wait for live plotter to finish saving
+            wait $CURRENT_LIVE_PLOT_PID 2>/dev/null || true
+
+            echo -e "${BLUE}✓ Saved plots to $CURRENT_RUN_DIR/${NC}"
         else
-            python -m wagon_control.client $VERBOSE
+            # Single run - use the pre-created RUN_DIR if live plotting is enabled
+            echo -e "${ORANGE}=================================${NC}"
+            echo -e "${ORANGE}3. Starting Wagon Control System${NC}"
+            echo -e "${ORANGE}=================================${NC}"
+
+            if [ -n "$RUN_DIR" ]; then
+                RUN_DIR="$RUN_DIR" python -m wagon_control.client $VERBOSE
+            else
+                python -m wagon_control.client $VERBOSE
+            fi
         fi
 
         # Brief pause between runs (except after the last one)
@@ -230,11 +259,6 @@ if [ "$PLOT_ONLY" = false ]; then
             sleep 2
         fi
     done
-fi
-
-# Run post-visualization if requested (non-live mode)
-if [ "$PLOT_AFTER" = true ] && [ "$LIVE_PLOT" = false ]; then
-    python -m wagon_control.plot_results $SAVE_PLOTS
 fi
 
 # Wait for live plotter if it's running
@@ -247,11 +271,6 @@ if [ -n "$LIVE_PLOT_PID" ]; then
     fi
 
     wait $LIVE_PLOT_PID 2>/dev/null || true
-
-    # Save static plots after live plotting completes
-    if [ -n "$RUN_DIR" ]; then
-        python -m wagon_control.plot_results --run "$(basename "$RUN_DIR")" --save --no-show
-    fi
 fi
 
 # Clean up CSV files if requested

@@ -321,14 +321,8 @@ def plot_run_summary(run_dir: Path, save_plots: bool = False, show_plots: bool =
 
     run_name = run_dir.name
 
-    # Generate IMU plots (raw sensor data not shown in live plot)
-    imu_save_path = run_dir / "imu_data.png" if save_plots else None
-    plot_imu_data(imu_data, title=f"IMU Data - {run_name}", save_path=imu_save_path)
-
-    # Note: GPS trajectory, position error, heading comparison, and velocity plots
+    # Note: IMU plots have been removed - not needed
+    # GPS trajectory, position error, heading comparison, and velocity plots
     # are now consolidated into live_plot_snapshot.png for cleaner output
 
     # Output is handled by the calling script for consistent formatting
-
-    if show_plots:
-        plt.show()
