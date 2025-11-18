@@ -14,16 +14,19 @@ The control system consists of four hierarchical layers:
 
 ### 1. **State Estimation (Localizer)** - `localizer.py`
 - **Purpose**: Fuse noisy GPS and IMU data to estimate wagon state (position, heading, velocity)
-- **Algorithm**: Complementary filter with bias compensation
-  - GPS (1 Hz): Position correction with outlier rejection (2.5m threshold - optimized)
-  - IMU (20 Hz): Continuous prediction via accelerometer/gyroscope integration
-  - Velocity correction: Proportional feedback (gain=0.45) prevents unbounded drift
+- **Algorithm**: Extended Kalman Filter (EKF) with curvature-adaptive sensor fusion
+  - **State vector** (5 elements): [px, py, θ, v, b_g] - position, heading, velocity, gyro bias
+  - **GPS updates** (1 Hz): Position measurements with Mahalanobis outlier rejection
+  - **IMU prediction** (20 Hz): Continuous state propagation via gyro/accelerometer integration
+  - **Covariance propagation**: Principled uncertainty quantification through Jacobian linearization
+  - **Curvature adaptation**: Dynamically adjusts GPS/IMU trust based on path curvature
 - **Key Parameters**:
-  - Gyro bias: 0.015 rad/s (estimated from -16.68° drift over 20s stationary phase)
-  - Accel X bias: 0.096 m/s² (measured from stationary data)
-  - Velocity filter alpha: 0.3 (30% new, 70% old - noise rejection vs responsiveness)
-  - GPS outlier threshold: 2.5m (1.25× max inter-update movement at 2 m/s)
-- **Known Limitation**: Y-axis accelerometer bias not compensated (assumed negligible for differential drive)
+  - EKF process noise: Q (5×5) scaled by configurable factors
+  - GPS measurement noise: R (2×2) = diag([0.25, 0.25]) m²
+  - Mahalanobis threshold: 9.0 (base, relaxed during high-curvature turns)
+  - Curvature heading scale: 7.0 (optimized - increases heading uncertainty 8× at κ=1.0 rad/m)
+  - Curvature threshold scale: 1.5 (optimized - relaxes GPS rejection 2.5× at κ=1.0 rad/m)
+  - Curvature bias scale: 2.0 (increases gyro bias uncertainty during turns)
 
 ### 2. **Path Following (Pure Pursuit)** - `follower.py`
 - **Purpose**: Generate desired velocity commands to track the reference trajectory
@@ -55,16 +58,17 @@ The control system consists of four hierarchical layers:
 
 ## Design Trade-Offs
 
-### Complementary Filter vs. Kalman Filter
-**Choice**: Complementary filter
+### Extended Kalman Filter (EKF) for Sensor Fusion
+**Choice**: Extended Kalman Filter with online gyro bias estimation
 **Rationale**:
-- **Pro:** Simple, deterministic, no tuning matrices
-- **Pro:** Real-time performance (no matrix inversions)
-- **Pro:** Sufficient for this application (GPS/IMU fusion well-understood)
-- **Con:** Less optimal than Kalman for non-Gaussian noise
-- **Con:** Manual bias compensation required
+- **Pro:** Optimal sensor fusion with principled uncertainty quantification
+- **Pro:** Online bias estimation eliminates need for manual calibration
+- **Pro:** Covariance propagation enables adaptive fusion (curvature-based trust)
+- **Pro:** Mahalanobis distance provides statistically-grounded outlier rejection
+- **Con:** More complex than complementary filter (5×5 matrices, Jacobian linearization)
+- **Con:** Requires tuning of Q and R noise covariance matrices
 
-**Impact**: Achieves ~12.45m ± 4.96m mean L2 error with simple implementation. Kalman would provide marginal improvement at significant complexity cost.
+**Impact**: Achieves 9.26m ± 4.74m with curvature-adaptive fusion (25.8% better than baseline). The principled uncertainty framework enables dynamic GPS/IMU trust balancing based on path geometry.
 
 ### Pure Pursuit vs. Model Predictive Control (MPC)
 **Choice**: Pure Pursuit with PI feedback
@@ -164,21 +168,76 @@ This feature enables:
 - **Automated Testing**: Streamlined data collection without manual plot closing
 - Each run saves to a separate timestamped directory for post-analysis
 
+### Curvature-Adaptive Sensor Fusion (Advanced Optimization)
+
+**Motivation**: The Lemniscate of Gerono path contains regions of high curvature (tight turns) and low curvature (straights). During tight turns, IMU gyro integration errors accumulate faster, while GPS provides more reliable absolute position. The key insight: **trust GPS more for absolute position over long distances, but trust IMU more for short-term motion tracking on straight sections**.
+
+**Implementation**:
+
+1. **Path Curvature Computation** (`path.py:reference_curvature()`)
+   - Computes curvature κ from parametric path derivatives
+   - Formula: κ = |x'y'' - y'x''| / (x'² + y'²)^(3/2)
+   - Lemniscate curvature ranges: 0.0 (straights) to ~1.5 rad/m (tight turns)
+
+2. **Adaptive Process Noise Scaling** (`localizer.py:set_path_curvature()`)
+   - **Heading uncertainty**: Q[2,2] = Q_base[2,2] × (1 + 7.0 × |κ|)
+     - At κ=1.0 rad/m: heading noise increases 8×
+     - Tells EKF to trust IMU heading less during turns
+   - **Gyro bias uncertainty**: Q[4,4] = Q_base[4,4] × (1 + 2.0 × |κ|)
+     - Bias estimation becomes harder during fast angular rates
+
+3. **Adaptive GPS Outlier Threshold** (`localizer.py:set_path_curvature()`)
+   - Threshold = 9.0 × (1 + 1.5 × |κ|)
+   - At κ=1.0 rad/m: threshold relaxed 2.5×
+   - Prevents valid GPS from being rejected when IMU drifts in turns
+
+**Parameter Optimization via Systematic Sweep**:
+
+Created `curvature_sweep.py` to test 20 configurations (200 total runs):
+- **Heading scale**: [3.0, 4.0, 5.0, 6.0, 7.0]
+- **Threshold scale**: [0.5, 1.0, 1.5, 2.0]
+- **Bias scale**: 2.0 (fixed)
+- **Runs per config**: 10 (for statistical validity)
+
+**Key Findings**:
+- **Low heading scale (3.0-5.0)**: 10-30% catastrophic failures (>30m) due to IMU drift
+- **Optimal configuration**: H7.0_T1.5_B2.0
+  - Heading scale 7.0: Strong distrust of IMU during turns
+  - Threshold scale 1.5: Moderate GPS acceptance relaxation
+  - **Zero catastrophic failures** in all tested configurations with heading≥6.0
+
+**Performance Results**:
+- **Before curvature adaptation** (EKF baseline): 12.48m ± 9.62m (1 catastrophic failure)
+- **After curvature adaptation** (H7.0_T1.5): 9.26m ± 4.74m (0 catastrophic failures)
+- **Improvement**: 25.8% better mean, 50.7% better consistency
+- **Validation**: 20 runs, 70% scored <10m
+
+**Integration** (`client.py:376-384`):
+```python
+# Compute path curvature for adaptive sensor fusion
+elapsed_time_for_curvature = current_time - self.follower.start_time
+path_curvature = path.reference_curvature(elapsed_time_for_curvature)
+self.localizer.set_path_curvature(path_curvature)
+```
+
+Called before each GPS update to dynamically adjust EKF trust parameters based on current path geometry.
+
 ## Known Limitations & Simplifications
 
 ### Simplifying Assumptions
 
-1. **Y-Axis Accelerometer Drift Ignored**
-   - **Assumption**: Only X-axis (forward) accelerometer bias compensated
-   - **Impact**: Y-axis drift accumulates, though rotation to body frame minimizes effect
-   - **Justification**: Differential drive primarily moves forward; lateral motion minimal
-   - **Future work**: Extend bias compensation to both axes for higher accuracy
+1. **Single-Axis Gyro Bias Estimation**
+   - **Assumption**: Only z-axis gyro bias estimated (yaw rate), x/y accelerometer biases assumed negligible
+   - **Reality**: All IMU axes have biases that vary with temperature and time
+   - **Impact**: X-axis accelerometer drift can affect velocity estimates
+   - **Mitigation**: EKF estimates gyro bias online; accelerometer biases could be added to state vector
+   - **Current approach**: Works well for short 20s missions; longer missions would benefit from full 6-axis bias estimation
 
-2. **Static Bias Compensation**
-   - **Assumption**: IMU biases are constant (measured once from stationary data)
-   - **Reality**: Biases vary with temperature, orientation, and time
-   - **Impact**: Performance degrades in long missions or varying environmental conditions
-   - **Mitigation**: Online bias estimation (see Future Improvements)
+2. **Constant Process/Measurement Noise**
+   - **Assumption**: Q and R matrices constant (except curvature-adaptive scaling)
+   - **Reality**: Sensor noise varies with speed, temperature, and environmental conditions
+   - **Impact**: EKF may be over/under-confident in certain scenarios
+   - **Mitigation**: Curvature-adaptive Q scaling addresses primary source of variation (path geometry)
 
 3. **GPS Rate Limitations**
    - **Assumption**: 1 Hz GPS sufficient for path following at 2 m/s
@@ -194,20 +253,23 @@ This feature enables:
 
 ### For Simulation/Algorithm Improvements
 
-1. **Extended Kalman Filter (EKF)**: Optimal sensor fusion with uncertainty quantification
-   - Probabilistic state estimates with covariance propagation
-   - Principled handling of non-Gaussian noise
-   - Online bias estimation as part of extended state vector
+1. **✅ IMPLEMENTED: Extended Kalman Filter (EKF)** with curvature-adaptive sensor fusion
+   - ✅ 5-state EKF with online gyro bias estimation
+   - ✅ Mahalanobis distance GPS outlier rejection
+   - ✅ Curvature-based Q matrix scaling for path-dependent fusion
+   - **Further improvements**: Extend to 8-state for full accelerometer bias estimation
 
-2. **Adaptive Control Gains**: Vary PI gains based on path curvature (tighter control on turns)
+2. **Curvature-Based Control Gains**: Vary PI gains based on path curvature
    - Schedule gains based on reference trajectory curvature
    - Higher gains for tight turns, lower for straight sections
    - Reduces overshoot while maintaining responsiveness
+   - **Note**: Curvature-adaptive *fusion* already implemented; control gains could be next
 
 3. **Predictive Lookahead**: Use path curvature to adjust lookahead dynamically
    - Longer lookahead on straights for smoother tracking
    - Shorter lookahead on curves for tighter following
    - Could reduce corner-cutting behavior
+   - **Current**: Fixed adaptive lookahead based on velocity only
 
 4. **Velocity Profiling**: Pre-compute optimal velocity profile for path
    - Slow down before sharp turns (respecting acceleration limits)
@@ -285,15 +347,52 @@ This feature enables:
 
 ## Performance Summary
 
-- **L2 Error**: 12.45m ± 4.96m (optimized system, 20 runs validated)
-  - Range: 6.88m - 24.23m
-  - 54.5% reduction in variance vs 5.0m threshold baseline
-  - **Zero catastrophic failures** (>50m eliminated via 2.5m GPS outlier rejection)
-  - 50% of runs achieve <10m error (vs 30% with 5.0m threshold)
-  - **Interpretation**: L2 error is cumulative over the 20-second trajectory
-    - Average error per second: 12.45m ÷ 20s = **0.622 m/s**
-    - Average instantaneous deviation: **30-60cm from reference path**
-    - This represents excellent tracking given noisy 1 Hz GPS and IMU drift
+### Final Optimized System (EKF + Curvature-Adaptive Fusion)
+
+- **L2 Error**: 9.26m ± 4.74m (20 runs validated, H7.0_T1.5_B2.0 configuration)
+  - Range: 3.89m - 19.75m
+  - **25.8% improvement** in mean error vs EKF baseline (12.48m)
+  - **50.7% improvement** in consistency (std dev: 4.74m vs 9.62m)
+  - **Zero catastrophic failures** (>30m) - eliminated via curvature-adaptive GPS acceptance
+  - **70% excellent runs** (<10m) vs 45% with baseline EKF
+  - **Interpretation**: L2 error represents time-averaged cumulative tracking error
+    - Average error per sample: 9.26m ÷ 20s = **463 mm/sample**
+    - Average instantaneous deviation: **~400-500mm from reference path**
+    - Excellent tracking performance for noisy 1 Hz GPS on high-curvature figure-eight path
+
+### Evolution of Performance
+
+1. **Initial Baseline** (Complementary Filter): 23.14m ± 21.04m
+   - High variance, unstable
+   - Frequent catastrophic failures
+
+2. **After Parameter Sweep** (Optimized Complementary): 12.45m ± 4.96m
+   - 46.2% mean improvement
+   - 76.4% variance reduction
+   - GPS threshold: 2.5m (down from 5.0m)
+
+3. **EKF Implementation** (No Curvature Adaptation): 12.48m ± 9.62m
+   - Online bias estimation
+   - Principled uncertainty quantification
+   - Still occasional catastrophic failures in tight turns
+
+4. **Final System** (EKF + Curvature Adaptation): 9.26m ± 4.74m
+   - 25.8% improvement over EKF baseline
+   - Zero catastrophic failures
+   - Robust to high-curvature sections
+
+### System Characteristics
+
 - **Completion Time**: Consistently 20.0s ± 0.1s
 - **Control Frequency**: 20 Hz (50ms update cycle)
-- **Robustness**: Aggressive GPS outlier rejection (2.5m) prevents controller from chasing bad measurements
+- **Sensor Fusion**: Extended Kalman Filter with 5-state vector [px, py, θ, v, b_g]
+- **Adaptive Fusion**: GPS/IMU trust dynamically adjusted based on path curvature
+- **Robustness**: Curvature-scaled Mahalanobis outlier rejection (9.0 base, 22.5 peak at κ=1.5 rad/m)
+
+### Key Innovation: Curvature-Adaptive Trust
+
+The breakthrough improvement came from recognizing that sensor reliability is **path-dependent**:
+- **Straight sections** (κ≈0): IMU gyro integration is accurate → trust IMU for heading
+- **Tight turns** (κ>1.0 rad/m): IMU drifts rapidly → trust GPS for position, relax outlier threshold
+
+This adaptive approach eliminated all catastrophic failures by preventing GPS rejection during the critical high-curvature phases where IMU is least reliable.

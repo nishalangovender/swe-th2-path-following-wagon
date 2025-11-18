@@ -205,6 +205,61 @@ Tuning rationale:
 - Works with stable velocity tracking (KD_V=0.05, KI_V=0.14) for reliable localization
 """
 
+# Curvature-Adaptive Sensor Fusion Parameters
+CURVATURE_HEADING_SCALE = 7.0
+"""Heading process noise scaling factor based on path curvature.
+
+Formula: heading_noise = base_noise * (1.0 + CURVATURE_HEADING_SCALE * |κ|)
+
+Controls how much to distrust IMU heading integration during curved paths:
+- Higher values (7-8): Trust GPS more during turns, prevents IMU drift
+- Current (7.0): Optimized from parameter sweep (20 configs × 10 runs)
+- Lower values (3-5): Trust IMU more during turns, but higher failure rate
+
+Tuning rationale:
+- At κ=1.0 rad/m (tight turn): heading noise increases 8× with current value
+- Gyro integration errors accumulate faster during fast rotations
+- Higher scaling prevents GPS rejection when IMU drifts in turns
+- Parameter sweep showed 7.0 provides best consistency (8.82m ± 2.40m)
+- Lower values (3.0-5.0) caused catastrophic failures in 10-30% of runs
+"""
+
+CURVATURE_BIAS_SCALE = 2.0
+"""Gyro bias process noise scaling factor based on path curvature.
+
+Formula: bias_noise = base_noise * (1.0 + CURVATURE_BIAS_SCALE * |κ|)
+
+Controls gyro bias estimation uncertainty during curved paths:
+- Higher values (3): More bias variation allowed in turns
+- Current (2.0): Moderate bias adaptation
+- Lower values (1): Assume stable bias even in turns
+
+Tuning rationale:
+- Bias estimation is harder during fast angular rates
+- At κ=1.0 rad/m: bias uncertainty increases 3× with current value
+- Prevents bias estimate from getting stuck during dynamic maneuvers
+"""
+
+CURVATURE_THRESHOLD_SCALE = 1.5
+"""GPS outlier threshold scaling factor based on path curvature.
+
+Formula: threshold = base_threshold * (1.0 + CURVATURE_THRESHOLD_SCALE * |κ|)
+
+Controls GPS outlier rejection relaxation during curved paths:
+- Higher values (2.0+): Too relaxed, accepts bad GPS outliers
+- Current (1.5): Optimized from parameter sweep (sweet spot)
+- Lower values (0.5-1.0): Too strict, rejects valid GPS in turns
+
+Tuning rationale:
+- Larger GPS/IMU disagreement expected when IMU drifts faster in turns
+- At κ=1.0 rad/m: Mahalanobis threshold increases 2.5× (9.21 → 23.03)
+- Prevents spurious GPS rejection during critical turn phases
+- Parameter sweep showed 1.5 is optimal balance:
+  * Too low (0.5): GPS rejection → IMU drift → failures
+  * Too high (2.0): Accepts outliers → poor tracking
+- Works best with CURVATURE_HEADING_SCALE = 7.0
+"""
+
 
 # ============================================================================
 # Path Following Parameters (Pure Pursuit)

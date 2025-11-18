@@ -57,6 +57,8 @@ class LivePlotter:
         self.state_path = run_dir / "state_data.csv"
         self.reference_path = run_dir / "reference_data.csv"
         self.motor_path = run_dir / "motor_data.csv"
+        self.tracking_path = run_dir / "tracking_metrics.csv"
+        self.score_path = run_dir / "score.txt"
         self.update_interval = update_interval
 
         # Create figure with subplots - dark mode (improved 2-row layout)
@@ -66,7 +68,7 @@ class LivePlotter:
             fontsize=14,
             fontweight="bold",
             color=MONUMENTAL_CREAM,
-            y=0.98,
+            y=0.995,
         )
 
         # Create subplot grid: 2 rows, 3 columns
@@ -151,6 +153,9 @@ class LivePlotter:
         (self.position_error_y_line,) = self.ax_position_errors.plot(
             [], [], color=MONUMENTAL_BLUE, linewidth=1.5, alpha=0.8, label="Y Error"
         )
+        (self.slip_magnitude_line,) = self.ax_position_errors.plot(
+            [], [], color="#00ff00", linewidth=2, alpha=0.9, label="Slip (m/s²)"
+        )
 
         (self.velocity_ref_line,) = self.ax_velocity.plot(
             [], [], color=MONUMENTAL_BLUE, linewidth=2, alpha=0.7, label="REF (path follower)"
@@ -170,6 +175,20 @@ class LivePlotter:
         )
         (self.angular_velocity_loc_line,) = self.ax_angular_velocity.plot(
             [], [], color=MONUMENTAL_ORANGE, linewidth=1.5, alpha=0.7, label="LOC (actual)"
+        )
+
+        # Add text display for tracking metrics above trajectory plot
+        # Position above the left subplot (trajectory plot)
+        self.metrics_text = self.fig.text(
+            0.05,
+            0.965,
+            "",
+            fontsize=9,
+            verticalalignment="top",
+            horizontalalignment="left",
+            bbox=dict(boxstyle="round,pad=0.5", facecolor=MONUMENTAL_DARK_BLUE, alpha=0.95, edgecolor=MONUMENTAL_CREAM),
+            color=MONUMENTAL_CREAM,
+            family="monospace",
         )
 
         # Setup axes
@@ -406,6 +425,112 @@ class LivePlotter:
         except Exception:
             return None
 
+    def _load_tracking_metrics(self) -> Optional[Dict[str, np.ndarray]]:
+        """Load tracking metrics data from CSV file.
+
+        Returns:
+            Dictionary with keys: 'timestamp', 'error_x', 'error_y', 'error_l2',
+            'cumulative_l2_error', 'sample_count', 'avg_sample_error_mm'
+            or None if file doesn't exist or can't be parsed.
+        """
+        try:
+            if not self.tracking_path.exists():
+                return None
+
+            with open(self.tracking_path) as f:
+                reader = csv.DictReader(f)
+                data: Dict[str, List[float]] = {
+                    "timestamp": [],
+                    "error_x": [],
+                    "error_y": [],
+                    "error_l2": [],
+                    "cumulative_l2_error": [],
+                    "sample_count": [],
+                    "avg_sample_error_mm": [],
+                }
+                for row in reader:
+                    try:
+                        data["timestamp"].append(float(row["timestamp"]))
+                        data["error_x"].append(float(row["error_x"]))
+                        data["error_y"].append(float(row["error_y"]))
+                        data["error_l2"].append(float(row["error_l2"]))
+                        data["cumulative_l2_error"].append(float(row["cumulative_l2_error"]))
+                        data["sample_count"].append(float(row["sample_count"]))
+                        data["avg_sample_error_mm"].append(float(row["avg_sample_error_mm"]))
+                    except (ValueError, KeyError):
+                        continue
+
+            return {key: np.array(values) for key, values in data.items()}
+        except Exception:
+            return None
+
+    def _load_final_score(self) -> Optional[float]:
+        """Load final score from text file.
+
+        Returns:
+            Final L2 error score in meters, or None if file doesn't exist.
+        """
+        try:
+            if not self.score_path.exists():
+                return None
+
+            with open(self.score_path) as f:
+                score_str = f.read().strip()
+                return float(score_str)
+        except Exception:
+            return None
+
+    def _load_ekf_diagnostics(self) -> Optional[Dict[str, np.ndarray]]:
+        """Load EKF diagnostics data from CSV file.
+
+        Returns:
+            Dictionary with keys: 'timestamp', 'P_trace', 'P_px', 'P_py', 'P_theta',
+            'P_v', 'P_b_g', 'innovation_norm', 'mahalanobis', 'gyro_bias',
+            'outliers_rejected', 'slip_magnitude'
+            or None if file doesn't exist or can't be parsed.
+        """
+        try:
+            ekf_path = self.run_dir / "ekf_diagnostics.csv"
+            if not ekf_path.exists():
+                return None
+
+            with open(ekf_path) as f:
+                reader = csv.DictReader(f)
+                data: Dict[str, List[float]] = {
+                    "timestamp": [],
+                    "P_trace": [],
+                    "P_px": [],
+                    "P_py": [],
+                    "P_theta": [],
+                    "P_v": [],
+                    "P_b_g": [],
+                    "innovation_norm": [],
+                    "mahalanobis": [],
+                    "gyro_bias": [],
+                    "outliers_rejected": [],
+                    "slip_magnitude": [],
+                }
+                for row in reader:
+                    try:
+                        data["timestamp"].append(float(row["timestamp"]))
+                        data["P_trace"].append(float(row["P_trace"]))
+                        data["P_px"].append(float(row["P_px"]))
+                        data["P_py"].append(float(row["P_py"]))
+                        data["P_theta"].append(float(row["P_theta"]))
+                        data["P_v"].append(float(row["P_v"]))
+                        data["P_b_g"].append(float(row["P_b_g"]))
+                        data["innovation_norm"].append(float(row["innovation_norm"]))
+                        data["mahalanobis"].append(float(row["mahalanobis"]))
+                        data["gyro_bias"].append(float(row["gyro_bias"]))
+                        data["outliers_rejected"].append(float(row["outliers_rejected"]))
+                        data["slip_magnitude"].append(float(row["slip_magnitude"]))
+                    except (ValueError, KeyError):
+                        continue
+
+            return {key: np.array(values) for key, values in data.items()}
+        except Exception:
+            return None
+
     def _update(self, frame: int) -> tuple:
         """Update plots with new data from CSV files.
 
@@ -442,12 +567,14 @@ class LivePlotter:
             self.heading_loc_line,
             self.position_error_x_line,
             self.position_error_y_line,
+            self.slip_magnitude_line,
             self.velocity_ref_line,
             self.velocity_cmd_line,
             self.velocity_loc_line,
             self.angular_velocity_ref_line,
             self.angular_velocity_cmd_line,
             self.angular_velocity_loc_line,
+            self.metrics_text,
         )
 
     def _update_trajectories(self) -> None:
@@ -489,6 +616,47 @@ class LivePlotter:
                 self.traj_start.set_data([x[0]], [y[0]])
             elif state_data is not None and len(state_data["x_loc"]) > 0:
                 self.traj_start.set_data([state_data["x_loc"][0]], [state_data["y_loc"][0]])
+
+            # Update tracking metrics text overlay
+            tracking_data = self._load_tracking_metrics()
+            final_score = self._load_final_score()
+
+            if tracking_data is not None and len(tracking_data["cumulative_l2_error"]) > 0:
+                # Get latest metrics
+                est_l2 = tracking_data["cumulative_l2_error"][-1]
+                est_avg_mm = tracking_data["avg_sample_error_mm"][-1]
+                sample_count = int(tracking_data["sample_count"][-1])
+
+                # Build metrics text
+                metrics_lines = [
+                    "=== TRACKING METRICS ===",
+                    f"Est. L2: {est_l2:.3f}m",
+                    f"Est. Avg: {est_avg_mm:.1f}mm/sample",
+                    f"Samples: {sample_count}",
+                ]
+
+                # Add final score if available
+                if final_score is not None:
+                    system_avg_mm = (final_score / 20.0) * 1000.0
+                    diff_mm = abs(est_avg_mm - system_avg_mm)
+                    metrics_lines.extend([
+                        "",
+                        "=== FINAL SCORE ===",
+                        f"System L2: {final_score:.3f}m",
+                        f"System Avg: {system_avg_mm:.1f}mm/sample",
+                        "",
+                        f"Difference: {diff_mm:.1f}mm/sample",
+                    ])
+
+                    # Add quality indicator
+                    if diff_mm < 10.0:
+                        metrics_lines.append("✓ LOC GOOD")
+                    else:
+                        metrics_lines.append("⚠ LOC NEEDS TUNING")
+
+                self.metrics_text.set_text("\n".join(metrics_lines))
+            else:
+                self.metrics_text.set_text("Waiting for data...")
 
         except Exception as e:
             logging.debug(f"Error updating trajectories: {e}")
@@ -632,6 +800,16 @@ class LivePlotter:
             # Update Position X/Y Errors plot
             self.position_error_x_line.set_data(relative_times, error_x)
             self.position_error_y_line.set_data(relative_times, error_y)
+
+            # Load and plot slip magnitude
+            ekf_data = self._load_ekf_diagnostics()
+            if ekf_data is not None and len(ekf_data["slip_magnitude"]) > 0:
+                # Align EKF diagnostics timestamps with relative times
+                min_ekf_len = min(len(ekf_data["slip_magnitude"]), len(relative_times))
+                self.slip_magnitude_line.set_data(
+                    relative_times[:min_ekf_len], ekf_data["slip_magnitude"][:min_ekf_len]
+                )
+
             self.ax_position_errors.relim()
             self.ax_position_errors.autoscale_view()
 

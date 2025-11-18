@@ -7,6 +7,8 @@ This module provides CSV data logging for:
 - Reference trajectory (planned path)
 - Motor controller diagnostics (velocities, errors, commands)
 - EKF diagnostics (covariance, innovations, gyro bias)
+- Tracking metrics (position errors, L2 error, localization quality)
+- Final score (ground truth from system)
 """
 
 import csv
@@ -35,6 +37,8 @@ class DataCollector:
         reference_csv_file: File handle for reference trajectory CSV.
         motor_csv_file: File handle for motor controller CSV.
         ekf_csv_file: File handle for EKF diagnostics CSV.
+        tracking_csv_file: File handle for tracking metrics CSV.
+        score_path: Path for final score text file.
     """
 
     def __init__(self, output_dir: str = ".", run_dir: Optional[str] = None) -> None:
@@ -66,6 +70,8 @@ class DataCollector:
         self.motor_csv_writer: Any = None
         self.ekf_csv_file: Optional[TextIO] = None
         self.ekf_csv_writer: Any = None
+        self.tracking_csv_file: Optional[TextIO] = None
+        self.tracking_csv_writer: Any = None
 
         # Determine run directory
         if run_dir:
@@ -90,6 +96,8 @@ class DataCollector:
         self.reference_output_path: Path = self.run_dir / "reference_data.csv"
         self.motor_output_path: Path = self.run_dir / "motor_data.csv"
         self.ekf_output_path: Path = self.run_dir / "ekf_diagnostics.csv"
+        self.tracking_output_path: Path = self.run_dir / "tracking_metrics.csv"
+        self.score_output_path: Path = self.run_dir / "score.txt"
 
     def setup(self) -> None:
         """Initialize CSV files with headers.
@@ -157,9 +165,26 @@ class DataCollector:
                 "mahalanobis",
                 "gyro_bias",
                 "outliers_rejected",
+                "slip_magnitude",
             ]
         )
         self.ekf_csv_file.flush()
+
+        # Setup tracking metrics CSV file (position errors and L2 tracking)
+        self.tracking_csv_file = open(self.tracking_output_path, "w", newline="")
+        self.tracking_csv_writer = csv.writer(self.tracking_csv_file)
+        self.tracking_csv_writer.writerow(
+            [
+                "timestamp",
+                "error_x",
+                "error_y",
+                "error_l2",
+                "cumulative_l2_error",
+                "sample_count",
+                "avg_sample_error_mm",
+            ]
+        )
+        self.tracking_csv_file.flush()
 
         print(
             f"{TERM_BLUE}✓ Initialized data collection to results/{self.run_dir.name}/{TERM_RESET}"
@@ -268,7 +293,8 @@ class DataCollector:
             timestamp: Current time (seconds).
             diagnostics: Dictionary containing EKF data with keys:
                 'P_trace', 'P_px', 'P_py', 'P_theta', 'P_v', 'P_b_g',
-                'innovation_norm', 'mahalanobis', 'gyro_bias', 'outliers_rejected'
+                'innovation_norm', 'mahalanobis', 'gyro_bias', 'outliers_rejected',
+                'slip_magnitude'
         """
         self.ekf_csv_writer.writerow(
             [
@@ -283,10 +309,58 @@ class DataCollector:
                 diagnostics["mahalanobis"],
                 diagnostics["gyro_bias"],
                 diagnostics["outliers_rejected"],
+                diagnostics["slip_magnitude"],
             ]
         )
         if self.ekf_csv_file:
             self.ekf_csv_file.flush()
+
+    def log_tracking_metrics(
+        self,
+        timestamp: float,
+        error_x: float,
+        error_y: float,
+        error_l2: float,
+        cumulative_l2_error: float,
+        sample_count: int,
+        avg_sample_error_mm: float,
+    ) -> None:
+        """Log tracking error metrics to CSV.
+
+        Args:
+            timestamp: Current time (seconds).
+            error_x: X position error (meters).
+            error_y: Y position error (meters).
+            error_l2: L2 norm of position error (meters).
+            cumulative_l2_error: Running sum of L2 errors (meters).
+            sample_count: Number of samples so far.
+            avg_sample_error_mm: Average error per sample (millimeters).
+        """
+        self.tracking_csv_writer.writerow(
+            [
+                timestamp,
+                error_x,
+                error_y,
+                error_l2,
+                cumulative_l2_error,
+                sample_count,
+                avg_sample_error_mm,
+            ]
+        )
+        if self.tracking_csv_file:
+            self.tracking_csv_file.flush()
+
+    def log_final_score(self, score: float) -> None:
+        """Log final ground truth score to text file.
+
+        Args:
+            score: Final L2 error from system (meters).
+        """
+        with open(self.score_output_path, "w") as f:
+            f.write(f"{score:.6f}\n")
+        print(
+            f"{TERM_BLUE}✓ Saved final score: {score:.3f}m to {self.score_output_path.name}{TERM_RESET}"
+        )
 
     def cleanup(self) -> None:
         """Close all CSV files and log final output location."""
@@ -302,6 +376,8 @@ class DataCollector:
             self.motor_csv_file.close()
         if self.ekf_csv_file:
             self.ekf_csv_file.close()
+        if self.tracking_csv_file:
+            self.tracking_csv_file.close()
 
         print(f"{TERM_BLUE}✓ Saved sensor data to results/{self.run_dir.name}/{TERM_RESET}")
 

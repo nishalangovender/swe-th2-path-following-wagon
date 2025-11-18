@@ -45,9 +45,16 @@ class WagonLocalizer:
             cfg = config
 
         # EKF noise parameters (apply scaling factors for tuning)
-        self.Q = cfg.EKF_Q.copy() * cfg.EKF_Q_SCALE  # Process noise covariance (5×5)
+        self.Q_base = cfg.EKF_Q.copy() * cfg.EKF_Q_SCALE  # Base process noise covariance (5×5)
+        self.Q = self.Q_base.copy()  # Current process noise (will be adapted)
         self.R_gps = cfg.EKF_R_GPS.copy() * cfg.EKF_R_SCALE  # GPS measurement noise covariance (2×2)
-        self.mahalanobis_threshold = cfg.EKF_MAHALANOBIS_THRESHOLD
+        self.mahalanobis_threshold_base = cfg.EKF_MAHALANOBIS_THRESHOLD
+        self.mahalanobis_threshold = self.mahalanobis_threshold_base
+
+        # Curvature-adaptive fusion scaling factors
+        self.curvature_heading_scale = cfg.CURVATURE_HEADING_SCALE
+        self.curvature_bias_scale = cfg.CURVATURE_BIAS_SCALE
+        self.curvature_threshold_scale = cfg.CURVATURE_THRESHOLD_SCALE
 
         # State vector: [px, py, theta, v, b_g]
         self.x = np.zeros((5, 1))
@@ -65,6 +72,42 @@ class WagonLocalizer:
         self.last_innovation = np.zeros((2, 1))
         self.last_mahalanobis = 0.0
         self.gps_outliers_rejected = 0
+
+        # Curvature-adaptive fusion parameters
+        self.current_curvature = 0.0
+
+        # Slip diagnostics
+        self.current_omega = 0.0  # Bias-corrected angular velocity (rad/s)
+        self.current_a_y = 0.0  # Lateral acceleration (m/s²)
+
+    def set_path_curvature(self, curvature: float) -> None:
+        """Set current path curvature for adaptive sensor fusion.
+
+        Adapts process noise and GPS outlier threshold based on path curvature:
+        - High curvature (tight turns): Trust IMU less, relax GPS threshold
+        - Low curvature (straights): Trust IMU more, strict GPS threshold
+
+        Args:
+            curvature: Path curvature in rad/m (absolute value used)
+        """
+        self.current_curvature = abs(curvature)
+
+        # Adapt process noise for heading (index 2) based on curvature
+        # During tight turns, gyro integration errors accumulate faster
+        # Uses configurable scaling factor from config.CURVATURE_HEADING_SCALE
+        heading_noise_scale = 1.0 + self.curvature_heading_scale * self.current_curvature
+        self.Q[2, 2] = self.Q_base[2, 2] * heading_noise_scale
+
+        # Also scale gyro bias uncertainty (index 4) - bias estimation harder during fast turns
+        # Uses configurable scaling factor from config.CURVATURE_BIAS_SCALE
+        bias_noise_scale = 1.0 + self.curvature_bias_scale * self.current_curvature
+        self.Q[4, 4] = self.Q_base[4, 4] * bias_noise_scale
+
+        # Relax GPS outlier threshold during high-curvature sections
+        # Larger GPS/IMU disagreement expected when IMU drifts faster in turns
+        # Uses configurable scaling factor from config.CURVATURE_THRESHOLD_SCALE
+        threshold_scale = 1.0 + self.curvature_threshold_scale * self.current_curvature
+        self.mahalanobis_threshold = self.mahalanobis_threshold_base * threshold_scale
 
     def update_gps(self, x: float, y: float, timestamp: Optional[float] = None) -> None:
         """Update state estimate from GPS position measurement.
@@ -168,6 +211,10 @@ class WagonLocalizer:
         # Bias-corrected gyro measurement
         omega = theta_dot - b_g
 
+        # Store for slip diagnostics
+        self.current_omega = omega
+        self.current_a_y = a_y_body
+
         # Longitudinal acceleration (ignore lateral for differential drive)
         a_long = a_x_body
 
@@ -248,6 +295,7 @@ class WagonLocalizer:
                 - mahalanobis: Mahalanobis distance of last GPS update
                 - gyro_bias: Current gyro bias estimate (rad/s)
                 - outliers_rejected: Total count of GPS outliers rejected
+                - slip_magnitude: Lateral slip indicator (m/s²)
         """
         return {
             "P_trace": float(np.trace(self.P)),
@@ -260,7 +308,36 @@ class WagonLocalizer:
             "mahalanobis": float(self.last_mahalanobis),
             "gyro_bias": float(self.x[4, 0]),
             "outliers_rejected": self.gps_outliers_rejected,
+            "slip_magnitude": self.compute_slip_indicator(),
         }
+
+    def compute_slip_indicator(self) -> float:
+        """Compute lateral slip indicator from lateral acceleration.
+
+        For pure rolling motion with no slip, the lateral acceleration should
+        match the centripetal acceleration: a_y_expected = v * omega.
+
+        Slip occurs when measured a_y deviates from this expected value,
+        indicating lateral forces (friction, inertia) causing sideways motion.
+
+        Returns:
+            Slip magnitude in m/s² (0 = no slip, perfect rolling condition).
+        """
+        if not self.initialized:
+            return 0.0
+
+        # Extract current forward velocity
+        v = float(self.x[3, 0])
+
+        # Expected lateral acceleration for pure rolling (centripetal)
+        # For a body moving in a circle: a_centripetal = v * omega
+        a_y_expected = v * self.current_omega
+
+        # Slip magnitude = |measured - expected|
+        # Large values indicate significant lateral slip
+        slip_magnitude = abs(self.current_a_y - a_y_expected)
+
+        return slip_magnitude
 
     def reset(self) -> None:
         """Reset EKF to initial conditions (uninitialized state)."""

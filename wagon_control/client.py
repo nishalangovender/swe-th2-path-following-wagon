@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import signal
 import sys
 import time
@@ -181,6 +182,10 @@ class WagonController:
         self.path_x = path_data["x"]
         self.path_y = path_data["y"]
 
+        # Tracking metrics for localization quality analysis
+        self.cumulative_l2_error: float = 0.0  # Running sum of L2 position errors
+        self.sample_count: int = 0  # Number of tracking error samples logged
+
     async def send_velocity_command(
         self, websocket: Any, v_left: float, v_right: float, log: bool = False
     ) -> None:
@@ -291,7 +296,43 @@ class WagonController:
 
         if message_type == "score":
             score = data.get("score")
-            logging.info(f"{TERM_BLUE}\033[1m✓ Received score: {score:.2f}m\033[0m{TERM_RESET}")
+
+            # Log the final score to file
+            self.data_collector.log_final_score(score)
+
+            # Calculate system's average distance per sample for better intuition
+            # L2_error = Σ(distances) / 20s, so Σ(distances) = L2_error × 20s
+            # At 20 Hz for 20s: ~400 samples
+            # avg_distance = Σ(distances) / 400 = (L2_error × 20) / 400 = L2_error / 20
+            system_avg_mm = (score / 20.0) * 1000.0
+
+            # Calculate our estimated metrics based on localization
+            if self.sample_count > 0:
+                est_avg_mm = (self.cumulative_l2_error / self.sample_count) * 1000.0
+                est_l2_error = self.cumulative_l2_error
+
+                # Display results with comparison
+                logging.info(f"\n{TERM_BLUE}\033[1m=== FINAL RESULTS ==={TERM_RESET}")
+                logging.info(f"{TERM_BLUE}\033[1m✓ System Score (Ground Truth):{TERM_RESET}")
+                logging.info(f"{TERM_BLUE}  L2 Error: {score:.3f}m{TERM_RESET}")
+                logging.info(f"{TERM_BLUE}  Avg per sample: {system_avg_mm:.1f}mm{TERM_RESET}")
+                logging.info(f"\n{TERM_BLUE}\033[1m✓ Estimated (Based on Localization):{TERM_RESET}")
+                logging.info(f"{TERM_BLUE}  Cumulative L2: {est_l2_error:.3f}m (sum of {self.sample_count} samples){TERM_RESET}")
+                logging.info(f"{TERM_BLUE}  Avg per sample: {est_avg_mm:.1f}mm{TERM_RESET}")
+                logging.info(f"\n{TERM_BLUE}\033[1m✓ Comparison:{TERM_RESET}")
+                logging.info(f"{TERM_BLUE}  Difference: {abs(est_avg_mm - system_avg_mm):.1f}mm per sample{TERM_RESET}")
+
+                # Interpretation guidance
+                if abs(est_avg_mm - system_avg_mm) < 10.0:
+                    logging.info(f"{TERM_BLUE}  → Localization is GOOD - estimates match ground truth closely{TERM_RESET}")
+                    logging.info(f"{TERM_BLUE}  → Focus on tuning control parameters{TERM_RESET}")
+                else:
+                    logging.info(f"{TERM_BLUE}  → Localization may need tuning - significant difference detected{TERM_RESET}")
+                    logging.info(f"{TERM_BLUE}  → Consider adjusting EKF matrices or sensor fusion{TERM_RESET}")
+            else:
+                logging.info(f"{TERM_BLUE}\033[1m✓ Received score: {score:.3f}m (L2 error)\033[0m{TERM_RESET}")
+                logging.info(f"{TERM_BLUE}\033[1m  → Average tracking error: {system_avg_mm:.1f}mm per sample\033[0m{TERM_RESET}")
+
             self.should_stop = True
         else:
             # Unknown message type - log for debugging
@@ -365,6 +406,16 @@ class WagonController:
                             if message_type == "sensors":
                                 current_time = time.time()
 
+                                # Compute path curvature for adaptive sensor fusion
+                                if self.follower.start_time is not None:
+                                    elapsed_time_for_curvature = current_time - self.follower.start_time
+                                else:
+                                    elapsed_time_for_curvature = 0.0
+
+                                # Get current path curvature and set in localizer
+                                path_curvature = path.reference_curvature(elapsed_time_for_curvature)
+                                self.localizer.set_path_curvature(path_curvature)
+
                                 # Update localizer with full IMU (accelerometer + gyro)
                                 if self.last_update_time is not None:
                                     dt = current_time - self.last_update_time
@@ -411,6 +462,27 @@ class WagonController:
                                     ref_state["x"],
                                     ref_state["y"],
                                     ref_state["theta"],
+                                )
+
+                                # Calculate and log tracking error metrics
+                                error_x = ref_state["x"] - state["x"]
+                                error_y = ref_state["y"] - state["y"]
+                                error_l2 = math.sqrt(error_x**2 + error_y**2)
+
+                                # Update cumulative tracking metrics
+                                self.cumulative_l2_error += error_l2
+                                self.sample_count += 1
+                                avg_sample_error_mm = (self.cumulative_l2_error / self.sample_count) * 1000.0
+
+                                # Log tracking metrics
+                                self.data_collector.log_tracking_metrics(
+                                    current_time,
+                                    error_x,
+                                    error_y,
+                                    error_l2,
+                                    self.cumulative_l2_error,
+                                    self.sample_count,
+                                    avg_sample_error_mm,
                                 )
 
                                 # Only run control after initialization from first GPS

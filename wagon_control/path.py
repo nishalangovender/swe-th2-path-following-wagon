@@ -94,6 +94,51 @@ def reference_heading(t: float, unwrap: bool = True) -> float:
     return float(theta_ref_wrapped)
 
 
+def reference_curvature(t: float) -> float:
+    """Compute path curvature at time t.
+
+    For parametric curve (x(k), y(k)) where k is the path parameter:
+        κ = |x'y'' - y'x''| / (x'² + y'²)^(3/2)
+
+    Path equations:
+        x(k) = -2*sin(k)*cos(k) = -sin(2k)
+        y(k) = 2*(sin(k) + 1)
+
+    Derivatives:
+        x'  = dx/dk = -2*cos(2k)
+        y'  = dy/dk = 2*cos(k)
+        x'' = d²x/dk² = 4*sin(2k)
+        y'' = d²y/dk² = -2*sin(k)
+
+    Args:
+        t: Time in seconds
+
+    Returns:
+        Curvature in rad/m (signed curvature, positive for left turns)
+    """
+    k = compute_k(t)
+
+    # First derivatives
+    dx_dk = -2.0 * np.cos(2.0 * k)
+    dy_dk = 2.0 * np.cos(k)
+
+    # Second derivatives
+    d2x_dk2 = 4.0 * np.sin(2.0 * k)
+    d2y_dk2 = -2.0 * np.sin(k)
+
+    # Curvature formula
+    numerator = dx_dk * d2y_dk2 - dy_dk * d2x_dk2
+    denominator = (dx_dk**2 + dy_dk**2)**1.5
+
+    # Avoid division by zero (stationary points)
+    if abs(denominator) < 1e-6:
+        return 0.0
+
+    curvature = numerator / denominator
+
+    return float(curvature)
+
+
 def reference_state(t: float) -> dict[str, float]:
     """Get complete reference state at time t.
 
