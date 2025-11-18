@@ -66,6 +66,14 @@ class WagonLocalizer:
         self.last_mahalanobis = 0.0
         self.gps_outliers_rejected = 0
 
+        # Previous GPS measurement for velocity-based outlier detection
+        self.last_gps_pos = None
+        self.last_gps_time = None
+
+        # Maximum implied GPS velocity threshold (m/s)
+        # Rejects GPS updates that would imply unrealistic position jumps
+        self.max_gps_velocity = 2.5  # Conservative: actual wagon max is ~2.0 m/s
+
     def update_gps(self, x: float, y: float, timestamp: Optional[float] = None) -> None:
         """Update state estimate from GPS position measurement.
 
@@ -87,7 +95,31 @@ class WagonLocalizer:
             self.x[4, 0] = 0.0  # b_g (zero bias initially)
             self.t_prev = timestamp if timestamp is not None else 0.0
             self.initialized = True
+            self.last_gps_pos = np.array([x, y])
+            self.last_gps_time = timestamp
             return
+
+        # Velocity-based outlier rejection: Check if GPS jump implies unrealistic velocity
+        if self.last_gps_pos is not None and self.last_gps_time is not None and timestamp is not None:
+            dt_gps = timestamp - self.last_gps_time
+            if dt_gps > 0:
+                # Calculate position jump
+                dx = x - self.last_gps_pos[0]
+                dy = y - self.last_gps_pos[1]
+                distance = math.sqrt(dx**2 + dy**2)
+
+                # Implied velocity between GPS measurements
+                implied_velocity = distance / dt_gps
+
+                # Reject if implied velocity exceeds physical limits
+                if implied_velocity > self.max_gps_velocity:
+                    self.gps_outliers_rejected += 1
+                    print(
+                        f"GPS outlier rejected (velocity check): Implied velocity {implied_velocity:.2f} m/s "
+                        f"(threshold {self.max_gps_velocity:.2f} m/s), "
+                        f"position jump {distance:.2f}m in {dt_gps:.2f}s"
+                    )
+                    return
 
         # Measurement model: z = h(x) = [px, py]
         H = np.zeros((2, 5))
@@ -141,6 +173,10 @@ class WagonLocalizer:
 
         # Normalize heading to [-π, π]
         self.x[2, 0] = math.atan2(math.sin(self.x[2, 0]), math.cos(self.x[2, 0]))
+
+        # Update last GPS measurement for velocity-based outlier detection
+        self.last_gps_pos = np.array([x, y])
+        self.last_gps_time = timestamp
 
     def update_imu(
         self, a_x_body: float, a_y_body: float, theta_dot: float, dt: float
@@ -273,3 +309,5 @@ class WagonLocalizer:
         self.last_innovation = np.zeros((2, 1))
         self.last_mahalanobis = 0.0
         self.gps_outliers_rejected = 0
+        self.last_gps_pos = None
+        self.last_gps_time = None

@@ -87,17 +87,18 @@ Origin: Measured from stationary phase before movement
 """
 
 # GPS outlier rejection
-LOCALIZER_GPS_OUTLIER_THRESHOLD = 2.5
+LOCALIZER_GPS_OUTLIER_THRESHOLD = 1.5
 """GPS outlier rejection threshold (meters).
 
 Reject GPS updates that are more than this distance from predicted position.
 Protects against multipath errors, atmospheric interference, and GPS glitches.
 
 Tuning rationale:
-- 2.5m threshold is aggressive but reasonable (1.25× max movement between updates)
+- 1.5m threshold is aggressive and provides strong protection against outliers
 - At 2m/s max velocity and 1Hz GPS, wagon moves ≤2m between GPS updates
 - Rejects GPS outliers more aggressively to prevent catastrophic failures
-- Tightened from 5m after observing rare 50m+ outlier failures
+- Tightened from 2.5m after observing 1.38m GPS jump causing 40m+ error (run_20251117_230231)
+- Previous thresholds: 5m → 2.5m → 1.5m (progressively tighter based on observed failures)
 """
 
 
@@ -191,18 +192,19 @@ Tuning rationale:
 - Use parameter sweep to optimize this factor
 """
 
-EKF_R_SCALE = 1.15
+EKF_R_SCALE = 1.0
 """Global scaling factor for GPS measurement noise covariance R.
 
 Larger values (>1) = trust GPS less, trust model more
 Smaller values (<1) = trust GPS more, trust model less
 
 Tuning rationale:
-- Balanced at 1.15 for moderate GPS trust
-- Previous 1.3 was too high - wagon drifted too much without GPS corrections
-- 1.15 provides good balance: reduces GPS jumps without excessive drift
-- Prevents both position jumps (GPS too trusted) and drift (GPS not trusted enough)
-- Works with stable velocity tracking (KD_V=0.05, KI_V=0.14) for reliable localization
+- Reduced from 1.15 to 1.0 to improve GPS outlier rejection sensitivity
+- Lower R scaling makes Mahalanobis distance test more sensitive to outliers
+- Smaller innovation covariance (S = H*P*H' + R) means tighter outlier rejection gate
+- Combined with tighter LOCALIZER_GPS_OUTLIER_THRESHOLD (1.5m), provides robust protection
+- Previous values: 1.3 (too high, excessive drift) → 1.15 (good balance) → 1.0 (better outlier rejection)
+- Works with stable velocity tracking (KD_V=0.05, KI_V=0.15) for reliable localization
 """
 
 
