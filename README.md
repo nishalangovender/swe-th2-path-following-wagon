@@ -172,6 +172,14 @@ wagon_control/              # Main Python package
 ├── live_plot.py           # Real-time visualization
 └── plot_results.py        # CLI for visualization
 
+analysis/                  # Parameter sweep and statistical testing framework
+├── __init__.py           # Framework API exports
+├── sweep.py              # Generic parameter sweep engine
+├── statistics.py         # Statistical computation and reporting
+├── visualize.py          # Result visualization (box plots, trends)
+├── cli.py                # Command-line interface
+└── test.sh               # Automated test runner script
+
 docs/                      # Documentation
 ├── APPROACH.md            # System design and trade-offs
 ├── ASSIGNMENT.md          # Original assignment details
@@ -238,7 +246,60 @@ MOTOR_KI_OMEGA = 0.04            # Optimized: was 0.06 (2nd best)
 
 Parameters were optimized using systematic parameter sweep testing (32 configurations × 10 runs each). The optimized configuration achieves 26% better mean error and 60% better consistency compared to manual tuning.
 
-See `config.py` for detailed parameter documentation and `PARAMETER_SWEEP.md` for the optimization methodology.
+See `config.py` for detailed parameter documentation.
+
+## Parameter Sweep Testing
+
+The `analysis/` module provides a modular framework for systematic parameter optimization and statistical testing. It can test any parameter from `config.py` and automatically computes comprehensive statistics.
+
+### Quick Start
+
+```bash
+# Test MOTOR_KP_V with 3 values
+./analysis/test.sh sweep --param MOTOR_KP_V=1.0,1.5,2.0 --runs 10
+
+# Test multiple parameters with visualization and statistical report
+./analysis/test.sh sweep \
+  --param MOTOR_KP_V=1.0,1.5,2.0 \
+  --param FOLLOWER_BASE_LOOKAHEAD=0.6,0.8,1.0 \
+  --runs 5 --visualize --report
+
+# Visualize existing results
+./analysis/test.sh visualize results/parameter_sweep_20250101_120000.csv
+
+# Generate statistical report
+./analysis/test.sh stats results/parameter_sweep_20250101_120000.csv
+```
+
+### Features
+
+- **Generic Parameter Testing**: Works with any `config.py` parameter
+- **Automatic Statistics**: Computes mean, std, median, quartiles, 95% CI
+- **Failure Detection**: Identifies catastrophic failures and invalid configurations
+- **Visualization**: Box plots, trend plots, and parameter effect analysis
+- **Statistical Reports**: Comprehensive analysis with ranking and comparisons
+
+### Output
+
+Results are saved in `results/` with timestamps:
+- `parameter_sweep_YYYYMMDD_HHMMSS.csv` - Detailed results with all scores
+- `parameter_sweep_YYYYMMDD_HHMMSS.txt` - Statistical report (if --report used)
+- `parameter_sweep_YYYYMMDD_HHMMSS_*.png` - Visualization plots (if --visualize used)
+
+### Programmatic Usage
+
+```python
+from analysis import ParameterSweep
+
+sweep = ParameterSweep(
+    parameters={'MOTOR_KP_V': [1.0, 1.5, 2.0]},
+    runs_per_config=10,
+    invalid_threshold=50.0
+)
+sweep.run()
+sweep.save_results('results/my_sweep.csv')
+sweep.print_summary()
+```
 
 ## Development
 

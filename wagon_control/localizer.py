@@ -219,19 +219,23 @@ class WagonLocalizer:
         a_long = a_x_body
 
         # Nonlinear state propagation: x_{k+1} = f(x_k, u_k)
+        # Normalize theta BEFORE propagation to ensure continuity
+        theta = math.atan2(math.sin(theta), math.cos(theta))
+
         theta_new = theta + omega * dt
         v_new = v + a_long * dt
         px_new = px + v * math.cos(theta) * dt
         py_new = py + v * math.sin(theta) * dt
         b_g_new = b_g  # Bias modeled as random walk
 
+        # Normalize theta_new to [-π, π] immediately after update
+        theta_new = math.atan2(math.sin(theta_new), math.cos(theta_new))
+
         # Update state vector
         self.x = np.array([[px_new], [py_new], [theta_new], [v_new], [b_g_new]])
 
-        # Normalize heading to [-π, π]
-        self.x[2, 0] = math.atan2(math.sin(self.x[2, 0]), math.cos(self.x[2, 0]))
-
         # Compute Jacobian F = ∂f/∂x (linearization for covariance propagation)
+        # Use normalized theta for Jacobian to match the state update
         F = np.eye(5)
 
         # ∂px_new/∂theta = -v * sin(theta) * dt

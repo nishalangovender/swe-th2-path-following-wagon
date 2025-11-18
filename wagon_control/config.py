@@ -246,7 +246,7 @@ Tuning rationale:
 - Prevents bias estimate from getting stuck during dynamic maneuvers
 """
 
-CURVATURE_THRESHOLD_SCALE = 1.2
+CURVATURE_THRESHOLD_SCALE = 1.8
 """GPS outlier threshold scaling factor based on path curvature.
 
 Formula: threshold = base_threshold * (1.0 + CURVATURE_THRESHOLD_SCALE * |κ|)
