@@ -62,9 +62,10 @@ Higher alpha = faster response but more noise
 Lower alpha = smoother but slower response
 
 Tuning rationale:
-- 0.3 (30% new, 70% old) provides good noise rejection
-- Smooths accelerometer integration errors
-- Maintains responsiveness for feedback control
+- Reverted from 0.4 to 0.3 after Option A caused catastrophic instability
+- Option A (alpha=0.4) introduced velocity noise that was amplified by KD_V
+- 0.3 (30% new, 70% old) provides stable noise rejection
+- Works with Phase 1 Revised baseline (9/10 good runs)
 """
 
 # IMU bias compensation
@@ -116,7 +117,7 @@ EKF_Q_DIAG = [
     0.01,    # px process noise (m²)
     0.01,    # py process noise (m²)
     1e-4,    # theta process noise (rad²)
-    0.1,     # v process noise (m²/s²)
+    0.15,    # v process noise (m²/s²) - PHASE 1 REVISED: Conservative increase
     1e-6     # b_g process noise (rad²/s²)
 ]
 """Process noise covariance diagonal for EKF.
@@ -124,7 +125,11 @@ EKF_Q_DIAG = [
 Tuning rationale:
 - Position noise (px, py): Small values (0.01) since position accumulates from velocity
 - Heading noise (theta): Very small (1e-4) for gyro integration with bias estimation
-- Velocity noise (v): Moderate (0.1) to account for accelerometer noise and model mismatch
+- Velocity noise (v): PHASE 1 REVISED - Increased from 0.1 to 0.15 (+50%)
+  * Conservative increase vs initial 0.25 which caused regression
+  * Analysis showed velocity oscillations and covariance growth
+  * Moderately higher Q[3,3] accounts for accelerometer noise
+  * Balances smoother estimates with maintaining GPS/IMU fusion quality
 - Gyro bias noise (b_g): Very small (1e-6) models slow random walk of bias over time
 """
 
@@ -191,18 +196,19 @@ Tuning rationale:
 - Use parameter sweep to optimize this factor
 """
 
-EKF_R_SCALE = 1.15
+EKF_R_SCALE = 1.25
 """Global scaling factor for GPS measurement noise covariance R.
 
 Larger values (>1) = trust GPS less, trust model more
 Smaller values (<1) = trust GPS more, trust model less
 
 Tuning rationale:
-- Balanced at 1.15 for moderate GPS trust
-- Previous 1.3 was too high - wagon drifted too much without GPS corrections
-- 1.15 provides good balance: reduces GPS jumps without excessive drift
-- Prevents both position jumps (GPS too trusted) and drift (GPS not trusted enough)
-- Works with stable velocity tracking (KD_V=0.05, KI_V=0.14) for reliable localization
+- PHASE 1 REVISED: Reverted to 1.25 (Stage 1 value)
+- Stage 1 successfully eliminated catastrophic failures with R_SCALE=1.25
+- Previous Phase 1 reduction to 1.15 increased variability (std 3.00m)
+- Effective GPS sigma: 3.0m × 1.25 = 3.75m (conservative)
+- Works with CURVATURE_THRESHOLD_SCALE=1.2 for balanced outlier rejection
+- Balances with moderate Q[3,3]=0.15 velocity noise increase
 """
 
 # Curvature-Adaptive Sensor Fusion Parameters
@@ -240,24 +246,23 @@ Tuning rationale:
 - Prevents bias estimate from getting stuck during dynamic maneuvers
 """
 
-CURVATURE_THRESHOLD_SCALE = 1.5
+CURVATURE_THRESHOLD_SCALE = 1.2
 """GPS outlier threshold scaling factor based on path curvature.
 
 Formula: threshold = base_threshold * (1.0 + CURVATURE_THRESHOLD_SCALE * |κ|)
 
 Controls GPS outlier rejection relaxation during curved paths:
 - Higher values (2.0+): Too relaxed, accepts bad GPS outliers
-- Current (1.5): Optimized from parameter sweep (sweet spot)
+- Current (1.2): Stage 1 - More conservative to prevent catastrophic failures
 - Lower values (0.5-1.0): Too strict, rejects valid GPS in turns
 
 Tuning rationale:
-- Larger GPS/IMU disagreement expected when IMU drifts faster in turns
-- At κ=1.0 rad/m: Mahalanobis threshold increases 2.5× (9.21 → 23.03)
-- Prevents spurious GPS rejection during critical turn phases
-- Parameter sweep showed 1.5 is optimal balance:
-  * Too low (0.5): GPS rejection → IMU drift → failures
-  * Too high (2.0): Accepts outliers → poor tracking
-- Works best with CURVATURE_HEADING_SCALE = 7.0
+- Stage 1: Reduced from 1.5 to 1.2 to eliminate catastrophic failures
+- More conservative GPS acceptance during turns prevents 10% failure rate
+- At κ=1.0 rad/m: Mahalanobis threshold increases 2.2× (9.21 → 20.26) vs 2.5× before
+- Tighter threshold rejects GPS outliers that could cause divergence
+- Balances between rejecting outliers and accepting valid GPS in turns
+- Works with EKF_R_SCALE=1.25 and CURVATURE_HEADING_SCALE=7.0
 """
 
 
@@ -283,11 +288,11 @@ FOLLOWER_LOOKAHEAD_TIME = 0.8
 Lookahead distance = FOLLOWER_LOOKAHEAD_TIME * |v| + FOLLOWER_LOOKAHEAD_OFFSET
 
 Tuning rationale:
-- Reduced from 0.9s to 0.8s for tighter, more responsive path tracking
-- Shorter lookahead reduces position errors and improves accuracy
-- Works better with conservative temporal feedback (K_TEMPORAL=0.10)
-- At typical speeds (0.5-1.0 m/s), lookahead is 0.7-1.1m (was 0.8-1.2m)
-- Provides velocity-proportional lookahead: faster → look further ahead
+- Reverted from 0.85s to 0.8s after Option A caused catastrophic instability
+- Combined with velocity filter and derivative changes, 0.85s contributed to divergence
+- 0.8s provides balanced responsiveness from Stage 1 baseline
+- At typical speeds (0.5-1.0 m/s), lookahead is 0.7-1.1m
+- Works with Phase 1 Revised stable configuration
 """
 
 FOLLOWER_LOOKAHEAD_OFFSET = 0.3
@@ -329,11 +334,10 @@ Velocity adjustment = K_TEMPORAL * temporal_error
 where temporal_error is in seconds (positive = behind, negative = ahead).
 
 Tuning rationale:
-- Reduced from 0.14 to 0.10 to prevent overcorrection when falling behind
-- Analysis of runs (7.43m-11.99m) showed temporal catch-up causing instability
-- Very conservative gain prevents temporal feedback from destabilizing system
-- Better to track spatially well than to aggressively chase temporal schedule
-- Works with KI_V=0.15, KD_V=0.05 for stable, consistent tracking
+- Reverted to 0.10 after Stage 2 regression (8.27m → 12.76m)
+- Stage 2 showed aggressive control amplifies noisy EKF state estimates
+- Conservative gain works well with Stage 1 results (mean 8.27m, std 1.54m)
+- Will re-evaluate after EKF noise tuning produces cleaner estimates
 """
 
 FOLLOWER_MAX_TEMPORAL_ADJUSTMENT = 0.4
@@ -361,12 +365,11 @@ MOTOR_KP_V = 1.0
 Higher = more aggressive velocity correction.
 
 Tuning rationale:
-- Iterative tuning: 0.5 → 0.9 → 1.1 (slightly slow) → 1.3 (too aggressive)
-- 1.3 caused degraded performance (overshoot/oscillations)
-- Original 1.2 was optimal for PI-only control
-- Reduced to 0.9 after adding feedforward to prevent overshoot
-- Increased to 1.0 for PID+FF to handle 160ms system lag
-- Works with KD=0.1 (damping) and KF=1.0 (anticipation) for balanced control
+- Reverted to 1.0 after Stage 2 regression (8.27m → 12.76m)
+- Higher gains amplified noisy velocity estimates from EKF
+- Works well with Stage 1 EKF parameters (mean 8.27m, std 1.54m)
+- Will re-tune after EKF produces smoother velocity estimates
+- Balanced with KI_V=0.15, KD_V=0.05, KF_V=1.0
 """
 
 MOTOR_KP_OMEGA = 0.5
@@ -386,12 +389,11 @@ MOTOR_KI_V = 0.15
 Eliminates steady-state velocity tracking error.
 
 Tuning rationale:
-- Iterative tuning: 0.05 → 0.12 → 0.15 → 0.13 → 0.14 → 0.15 (optimized)
-- Increased from 0.14 to 0.15 for better steady-state velocity tracking
-- Stronger integral action prevents wagon from consistently running slow
-- Reduced temporal gain (K_TEMPORAL=0.10) means less catch-up, so need better baseline tracking
-- Provides aggressive error elimination while KD_V=0.05 prevents overshoot
-- Works with KP_V=1.0, KD_V=0.05, KF_V=1.0 for stable PID+FF control
+- Reverted to 0.15 after Stage 2 regression (8.27m → 12.76m)
+- Aggressive integral amplified velocity estimate noise from EKF
+- Works well with Stage 1 parameters (mean 8.27m, std 1.54m)
+- Will re-tune after EKF noise parameters improve state estimates
+- Balanced with KP_V=1.0, KD_V=0.05, K_TEMPORAL=0.10
 """
 
 MOTOR_KI_OMEGA = 0.04
@@ -444,11 +446,11 @@ Provides damping and reduces transient response lag.
 Derivative term: v_d = -Kd * d(error)/dt
 
 Tuning rationale:
-- Reduced from 0.15 to 0.05 after observing instability (scores 11.02m, 27.80m)
-- KD=0.15 was amplifying sensor noise causing cascading instability
-- Conservative damping prevents derivative kick and noise amplification
-- Lower gain provides gentle damping without destabilizing the system
-- Works with KP=1.0, KI=0.14, KF=1.0 for stable PID+FF control
+- Reverted from 0.07 to 0.05 after Option A caused catastrophic instability
+- KD_V=0.07 amplified velocity filter noise (alpha=0.4), causing wild oscillations
+- 6/10 runs in Option A showed velocity runaway and GPS rejection
+- Conservative 0.05 provides stable damping without noise amplification
+- Works with Phase 1 Revised baseline (9/10 good runs: 7.56m ± 2.48m)
 """
 
 MOTOR_KD_OMEGA = 0.0
@@ -484,11 +486,11 @@ Compensates for systematic velocity tracking deficit.
 Compensation: v_cmd_final = v_cmd_pid * compensation_factor
 
 Tuning rationale:
-- Set to 1.08 (8% boost) to prevent wagon from falling behind
-- Temporal feedback reduced (K_TEMPORAL=0.10), so need better baseline velocity tracking
-- Compensates for actuator lag, friction, and torque limits
-- Prevents systematic underspeed that accumulates temporal lag
-- Works with KI_V=0.15 and KD_V=0.05 for consistent velocity tracking
+- Reverted to 1.08 after Stage 2 regression (8.27m → 12.76m)
+- Higher compensation with noisy estimates caused instability
+- 8% boost works well with Stage 1 parameters (mean 8.27m, std 1.54m)
+- Will re-tune after EKF provides cleaner velocity estimates
+- Balanced with KI_V=0.15, KP_V=1.0, K_TEMPORAL=0.10
 """
 
 MOTOR_OMEGA_COMPENSATION = 1.0
