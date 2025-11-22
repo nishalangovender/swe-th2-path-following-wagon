@@ -29,6 +29,8 @@ class PurePursuitFollower:
         max_lookahead: float = 2.0,
         k_temporal: float = 0.18,
         max_temporal_adjustment: float = 0.5,
+        bypass_mode: bool = False,
+        disable_temporal: bool = False,
     ):
         """Initialize the pure pursuit controller.
 
@@ -45,6 +47,9 @@ class PurePursuitFollower:
                 Adds velocity adjustment to catch up if behind schedule.
             max_temporal_adjustment: Maximum velocity adjustment from temporal
                 error (m/s). Default: 0.5. Prevents excessive corrections.
+            bypass_mode: If True, bypass pure pursuit and return reference
+                velocities directly from path.
+            disable_temporal: If True, disable temporal feedback (set k_temporal=0).
         """
         self.base_lookahead_distance = lookahead_distance
         self.adaptive = adaptive
@@ -52,10 +57,12 @@ class PurePursuitFollower:
         self.lookahead_offset = lookahead_offset
         self.min_lookahead = min_lookahead
         self.max_lookahead = max_lookahead
-        self.k_temporal = k_temporal
+        self.k_temporal = 0.0 if disable_temporal else k_temporal
         self.max_temporal_adjustment = max_temporal_adjustment
         self.lookahead_distance = lookahead_distance  # Will be updated if adaptive
         self.start_time: Optional[float] = None  # Start time for trajectory following
+        self.bypass_mode = bypass_mode
+        self.disable_temporal = disable_temporal
 
     def compute_adaptive_lookahead(self, velocity: float) -> float:
         """Compute velocity-adaptive lookahead distance.
@@ -255,6 +262,33 @@ class PurePursuitFollower:
         else:
             return 0.0
 
+    def compute_reference_heading(
+        self, path_x: np.ndarray, path_y: np.ndarray, ref_idx: int
+    ) -> float:
+        """Compute reference heading from path tangent.
+
+        Args:
+            path_x: Array of path x coordinates
+            path_y: Array of path y coordinates
+            ref_idx: Index of reference position on path
+
+        Returns:
+            Reference heading (rad)
+        """
+        if ref_idx >= len(path_x) - 1:
+            # At end, use last available heading
+            if ref_idx > 0:
+                dx = path_x[ref_idx] - path_x[ref_idx - 1]
+                dy = path_y[ref_idx] - path_y[ref_idx - 1]
+            else:
+                return 0.0
+        else:
+            # Use forward difference
+            dx = path_x[ref_idx + 1] - path_x[ref_idx]
+            dy = path_y[ref_idx + 1] - path_y[ref_idx]
+
+        return math.atan2(dy, dx)
+
     def compute_control(
         self,
         state: dict,
@@ -296,6 +330,31 @@ class PurePursuitFollower:
 
         # Find reference point based on elapsed time (where we SHOULD be)
         ref_idx = self.find_time_index(path_t, elapsed_time)
+
+        # Bypass mode: return reference velocities directly from path
+        if self.bypass_mode:
+            # Compute reference velocity from path
+            v_cmd = self.compute_reference_velocity(path_x, path_y, path_t, ref_idx)
+
+            # Compute reference heading and angular velocity
+            ref_heading = self.compute_reference_heading(path_x, path_y, ref_idx)
+
+            # Compute angular velocity needed to track heading
+            # Use simple proportional control to reference heading
+            heading_error = ref_heading - current_theta
+            # Normalize to [-π, π]
+            heading_error = math.atan2(math.sin(heading_error), math.cos(heading_error))
+
+            # Simple proportional gain for heading tracking
+            omega_cmd = 2.0 * heading_error  # Gain of 2.0 rad/s per rad error
+
+            # Compute reference acceleration
+            a_ref = self.compute_reference_acceleration(path_x, path_y, path_t, ref_idx)
+
+            # No angular acceleration reference
+            alpha_ref = 0.0
+
+            return v_cmd, omega_cmd, a_ref, alpha_ref
 
         # Compute reference velocity from path at reference time
         v_cmd = self.compute_reference_velocity(path_x, path_y, path_t, ref_idx)

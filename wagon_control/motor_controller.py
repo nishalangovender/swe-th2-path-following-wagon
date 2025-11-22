@@ -44,6 +44,10 @@ class MotorController:
         k_f_omega: float = 0.0,
         velocity_compensation: float = 1.0,
         omega_compensation: float = 1.0,
+        bypass_mode: bool = False,
+        disable_feedforward: bool = False,
+        disable_integral: bool = False,
+        disable_derivative: bool = False,
     ):
         """Initialize the motor controller.
 
@@ -78,22 +82,32 @@ class MotorController:
             omega_compensation: Compensation factor for angular velocity.
                 Range [1.0, 1.2]. Multiplies final omega_cmd.
                 Default: 1.0 (no compensation)
+            bypass_mode: If True, bypass PID and pass through reference velocities.
+            disable_feedforward: If True, disable feedforward terms.
+            disable_integral: If True, disable integral terms.
+            disable_derivative: If True, disable derivative terms.
         """
-        # Proportional gains
+        # Bypass and disable flags
+        self.bypass_mode = bypass_mode
+        self.disable_feedforward = disable_feedforward
+        self.disable_integral = disable_integral
+        self.disable_derivative = disable_derivative
+
+        # Proportional gains (always active when not in bypass mode)
         self.k_v = k_v
         self.k_omega = k_omega
 
-        # Integral gains
-        self.k_i_v = k_i_v
-        self.k_i_omega = k_i_omega
+        # Integral gains (set to 0 if disabled)
+        self.k_i_v = 0.0 if disable_integral else k_i_v
+        self.k_i_omega = 0.0 if disable_integral else k_i_omega
 
-        # Derivative gains
-        self.k_d_v = k_d_v
-        self.k_d_omega = k_d_omega
+        # Derivative gains (set to 0 if disabled)
+        self.k_d_v = 0.0 if disable_derivative else k_d_v
+        self.k_d_omega = 0.0 if disable_derivative else k_d_omega
 
-        # Feedforward gains
-        self.k_f_v = k_f_v
-        self.k_f_omega = k_f_omega
+        # Feedforward gains (set to 0 if disabled)
+        self.k_f_v = 0.0 if disable_feedforward else k_f_v
+        self.k_f_omega = 0.0 if disable_feedforward else k_f_omega
 
         # Velocity compensation factors
         self.velocity_compensation = velocity_compensation
@@ -152,6 +166,10 @@ class MotorController:
         Returns:
             Tuple of (v_cmd, omega_cmd) - corrected velocity commands
         """
+        # Bypass mode: pass through reference velocities
+        if self.bypass_mode:
+            return v_ref, omega_ref
+
         # Compute velocity errors
         v_err = v_ref - v_loc
         omega_err = omega_ref - omega_loc

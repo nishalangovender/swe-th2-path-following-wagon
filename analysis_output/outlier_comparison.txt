@@ -1,0 +1,78 @@
+================================================================================
+OUTLIER ANALYSIS: WHY DID SOME RUNS PERFORM BETTER/WORSE?
+================================================================================
+
+TOP 5 EXCEPTIONALLY GOOD RUNS:
+--------------------------------------------------------------------------------
+
+================================================================================
+TOP 5 POOR PERFORMING RUNS:
+--------------------------------------------------------------------------------
+
+Run: run_20251119_100512
+  Score: 44.235 mm
+  Max L2 Error: 4.454 mm
+  Error Std Dev: 1.281 mm
+  Avg EKF Covariance Trace: 27.019981
+  Max Slip Magnitude: 3.520
+  Outliers Rejected: 0
+  Velocity Error Std: 0.301
+  Angular Error Std: 0.575
+
+Run: run_20251119_101738
+  Score: 42.468 mm
+  Max L2 Error: 4.888 mm
+  Error Std Dev: 1.336 mm
+  Avg EKF Covariance Trace: 28.107799
+  Max Slip Magnitude: 3.201
+  Outliers Rejected: 0
+  Velocity Error Std: 0.260
+  Angular Error Std: 0.535
+
+Run: run_20251119_102339
+  Score: 20.827 mm
+  Max L2 Error: 2.219 mm
+  Error Std Dev: 0.610 mm
+  Avg EKF Covariance Trace: 26.593296
+  Max Slip Magnitude: 4.005
+  Outliers Rejected: 0
+  Velocity Error Std: 0.352
+  Angular Error Std: 0.784
+
+Run: run_20251119_101530
+  Score: 19.542 mm
+  Max L2 Error: 1.837 mm
+  Error Std Dev: 0.439 mm
+  Avg EKF Covariance Trace: 26.270934
+  Max Slip Magnitude: 3.955
+  Outliers Rejected: 0
+  Velocity Error Std: 0.258
+  Angular Error Std: 0.683
+
+================================================================================
+COMPARATIVE ANALYSIS:
+--------------------------------------------------------------------------------
+
+
+================================================================================
+KEY FINDINGS:
+--------------------------------------------------------------------------------
+
+Good runs typically exhibit:
+- Lower and more stable position errors
+- Lower EKF covariance (better estimation confidence)
+- Less wheel slip
+- More stable control commands (lower velocity/angular error std dev)
+
+Poor runs typically exhibit:
+- Higher peak errors and error variability
+- Higher EKF covariance (estimation uncertainty)
+- More wheel slip events
+- More oscillatory control (higher command std dev)
+- Potentially more measurement outliers
+
+These patterns suggest that poor performance is often linked to:
+1. Estimation quality degradation (high EKF uncertainty)
+2. Physical disturbances (wheel slip)
+3. Control instability (oscillations)
+            

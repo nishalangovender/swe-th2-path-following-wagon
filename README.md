@@ -42,26 +42,119 @@ The system uses a virtual environment for dependency management. Setup is automa
 ```
 
 This will:
-1. Check for Python 3
+1. Check for Python 3.7+ and required modules
 2. Create a virtual environment (if not exists)
 3. Install dependencies
 4. Run the wagon control system
 
-### Manual Setup
+### Prerequisites
 
-If you prefer manual setup:
+**The installation script will verify these automatically, but for reference:**
+
+- **Python 3.7 or higher** (tested on Python 3.7-3.12)
+- **pip** (usually included with Python)
+- **python3-venv** module (on some Linux distributions)
+- **bash** (for running `run.sh` on Linux/Mac)
+
+### Platform-Specific Installation
+
+#### Linux / macOS
 
 ```bash
-# Create virtual environment
+# Make the script executable (if needed)
+chmod +x run.sh
+
+# Run the automated setup and control system
+./run.sh
+```
+
+#### Windows
+
+```cmd
+# Use the Windows batch script
+run.bat
+```
+
+Or use PowerShell:
+```powershell
+python -m venv venv
+venv\Scripts\activate
+pip install --upgrade pip
+pip install -r requirements.txt
+python -m wagon_control.client
+```
+
+### Manual Setup
+
+If you prefer manual setup or the automated script fails:
+
+```bash
+# 1. Verify Python version (must be 3.7+)
+python3 --version
+
+# 2. Create virtual environment
 python3 -m venv venv
 
-# Activate virtual environment
+# 3. Activate virtual environment
 source venv/bin/activate  # On Linux/Mac
 # or
 venv\Scripts\activate     # On Windows
 
-# Install dependencies
+# 4. Upgrade pip
+pip install --upgrade pip
+
+# 5. Install dependencies
 pip install -r requirements.txt
+
+# 6. Run the control system
+python -m wagon_control.client
+```
+
+### Troubleshooting Installation
+
+#### "python3: command not found"
+- **Install Python 3.7+** from [python.org](https://www.python.org/downloads/)
+- On some systems, try `python` instead of `python3`
+
+#### "No module named venv"
+This occurs on some Linux distributions where venv isn't installed by default:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install python3-venv
+
+# Fedora/RHEL/CentOS
+sudo dnf install python3-venv
+
+# Arch Linux
+sudo pacman -S python
+```
+
+#### "Permission denied: ./run.sh"
+```bash
+chmod +x run.sh
+./run.sh
+```
+
+#### Windows: "execution of scripts is disabled"
+In PowerShell as Administrator:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+#### Dependencies fail to install
+Ensure you have a working internet connection and try:
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt --no-cache-dir
+```
+
+#### ImportError during runtime
+Make sure the virtual environment is activated:
+```bash
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
 ```
 
 ## Usage

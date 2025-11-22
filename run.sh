@@ -33,6 +33,9 @@ SAVE_PLOTS="--save"
 KEEP_CSV=true
 NUM_RUNS=1
 
+# Component isolation flags (for modular testing)
+COMPONENT_FLAGS=""
+
 show_help() {
     echo "Usage: $0 [NUM_RUNS] [OPTIONS]"
     echo ""
@@ -51,13 +54,25 @@ show_help() {
     echo "  --no-csv           Remove CSV files after run (keep only plots)"
     echo "  -h, --help         Show this help message"
     echo ""
+    echo "Component Isolation Flags (for modular testing):"
+    echo "  --no-ekf           Bypass EKF state estimation (use raw GPS + dead reckoning)"
+    echo "  --no-pure-pursuit  Bypass Pure Pursuit path following (use reference velocities)"
+    echo "  --no-temporal      Disable temporal feedback correction"
+    echo "  --no-pid           Bypass PID controller (pass through reference velocities)"
+    echo "  --no-feedforward   Disable feedforward terms in motor controller"
+    echo "  --no-integral      Disable integral terms in motor controller"
+    echo "  --no-derivative    Disable derivative terms in motor controller"
+    echo ""
     echo "Examples:"
-    echo "  ./run.sh                    # Single run with live visualization"
-    echo "  ./run.sh 5                  # 5 sequential runs (live plots disabled)"
-    echo "  ./run.sh 3 --verbose        # 3 runs with verbose logging"
-    echo "  ./run.sh --no-live          # Single run, then show plots after completion"
-    echo "  ./run.sh --no-plot          # Run data collection only, no plots"
-    echo "  ./run.sh --plot-only        # Just visualize the last run"
+    echo "  ./run.sh                       # Single run with live visualization"
+    echo "  ./run.sh 5                     # 5 sequential runs (live plots disabled)"
+    echo "  ./run.sh 3 --verbose           # 3 runs with verbose logging"
+    echo "  ./run.sh --no-live             # Single run, then show plots after completion"
+    echo "  ./run.sh --no-plot             # Run data collection only, no plots"
+    echo "  ./run.sh --plot-only           # Just visualize the last run"
+    echo "  ./run.sh --no-ekf              # Test without EKF state estimation"
+    echo "  ./run.sh --no-temporal 10      # 10 runs without temporal feedback"
+    echo "  ./run.sh --no-pid --no-feedforward  # Test without motor controller"
     exit 0
 }
 
@@ -103,6 +118,34 @@ while [[ $# -gt 0 ]]; do
             KEEP_CSV=false
             shift
             ;;
+        --no-ekf)
+            COMPONENT_FLAGS="$COMPONENT_FLAGS --no-ekf"
+            shift
+            ;;
+        --no-pure-pursuit)
+            COMPONENT_FLAGS="$COMPONENT_FLAGS --no-pure-pursuit"
+            shift
+            ;;
+        --no-temporal)
+            COMPONENT_FLAGS="$COMPONENT_FLAGS --no-temporal"
+            shift
+            ;;
+        --no-pid)
+            COMPONENT_FLAGS="$COMPONENT_FLAGS --no-pid"
+            shift
+            ;;
+        --no-feedforward)
+            COMPONENT_FLAGS="$COMPONENT_FLAGS --no-feedforward"
+            shift
+            ;;
+        --no-integral)
+            COMPONENT_FLAGS="$COMPONENT_FLAGS --no-integral"
+            shift
+            ;;
+        --no-derivative)
+            COMPONENT_FLAGS="$COMPONENT_FLAGS --no-derivative"
+            shift
+            ;;
         -h|--help)
             show_help
             ;;
@@ -130,6 +173,31 @@ fi
 
 PYTHON_VERSION=$(python3 --version)
 echo -e "${BLUE}✓ Found $PYTHON_VERSION${NC}"
+
+# Verify Python version meets minimum requirement (3.7+)
+PYTHON_MAJOR=$(python3 -c 'import sys; print(sys.version_info.major)' 2>/dev/null)
+PYTHON_MINOR=$(python3 -c 'import sys; print(sys.version_info.minor)' 2>/dev/null)
+
+if [ -z "$PYTHON_MAJOR" ] || [ -z "$PYTHON_MINOR" ]; then
+    echo -e "${CREAM}Error: Could not determine Python version${NC}"
+    exit 1
+fi
+
+if [ "$PYTHON_MAJOR" -lt 3 ] || ([ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 7 ]); then
+    echo -e "${CREAM}Error: Python 3.7+ required, found $PYTHON_VERSION${NC}"
+    echo "Please install Python 3.7 or higher and try again"
+    exit 1
+fi
+
+# Verify venv module is available
+if ! python3 -c "import venv" 2>/dev/null; then
+    echo -e "${CREAM}Error: Python venv module not found${NC}"
+    echo "Install it with:"
+    echo "  Ubuntu/Debian: sudo apt-get install python3-venv"
+    echo "  Fedora/RHEL:   sudo dnf install python3-venv"
+    echo "  macOS:         venv should be included with Python"
+    exit 1
+fi
 
 # Check if venv exists and was created with a different Python version
 if [ -d "venv" ]; then
@@ -234,7 +302,7 @@ if [ "$PLOT_ONLY" = false ]; then
             fi
 
             # Run the wagon control system with this run directory
-            RUN_DIR="$CURRENT_RUN_DIR" python -m wagon_control.client $VERBOSE
+            RUN_DIR="$CURRENT_RUN_DIR" python -m wagon_control.client $COMPONENT_FLAGS $VERBOSE
 
             # Wait for live plotter to finish saving
             wait $CURRENT_LIVE_PLOT_PID 2>/dev/null || true
@@ -247,9 +315,9 @@ if [ "$PLOT_ONLY" = false ]; then
             echo -e "${ORANGE}=================================${NC}"
 
             if [ -n "$RUN_DIR" ]; then
-                RUN_DIR="$RUN_DIR" python -m wagon_control.client $VERBOSE
+                RUN_DIR="$RUN_DIR" python -m wagon_control.client $COMPONENT_FLAGS $VERBOSE
             else
-                python -m wagon_control.client $VERBOSE
+                python -m wagon_control.client $COMPONENT_FLAGS $VERBOSE
             fi
         fi
 

@@ -30,19 +30,23 @@ class WagonLocalizer:
     process model (predict) and measurement model (update).
     """
 
-    def __init__(self, velocity_correction_gain: float = 0.5, config=None):
+    def __init__(self, velocity_correction_gain: float = 0.5, config=None, bypass_mode: bool = False):
         """Initialize the EKF localizer.
 
         Args:
             velocity_correction_gain: Maintained for API compatibility but unused in EKF.
             config: Configuration dictionary or module with EKF parameters.
                     If None, uses default values from wagon_control.config.
+            bypass_mode: If True, bypass EKF and use simple GPS + dead reckoning.
         """
         # Import config if not provided
         if config is None:
             from wagon_control import config as cfg
         else:
             cfg = config
+
+        # Bypass mode: skip EKF, use simple sensor integration
+        self.bypass_mode = bypass_mode
 
         # EKF noise parameters (apply scaling factors for tuning)
         self.Q_base = cfg.EKF_Q.copy() * cfg.EKF_Q_SCALE  # Base process noise covariance (5×5)
@@ -79,6 +83,13 @@ class WagonLocalizer:
         # Slip diagnostics
         self.current_omega = 0.0  # Bias-corrected angular velocity (rad/s)
         self.current_a_y = 0.0  # Lateral acceleration (m/s²)
+
+        # Bypass mode: simple dead reckoning state
+        if self.bypass_mode:
+            self.bypass_pos = np.array([0.0, 0.0])  # [x, y] position from GPS
+            self.bypass_theta = 0.0  # Heading from gyro integration
+            self.bypass_v_x = 0.0  # Velocity x from accel integration
+            self.bypass_v_y = 0.0  # Velocity y from accel integration
 
     def set_path_curvature(self, curvature: float) -> None:
         """Set current path curvature for adaptive sensor fusion.
@@ -121,6 +132,20 @@ class WagonLocalizer:
             y: GPS y-coordinate (meters)
             timestamp: GPS timestamp (seconds), used for initialization
         """
+        # Bypass mode: just store raw GPS position
+        if self.bypass_mode:
+            if not self.initialized:
+                self.bypass_pos = np.array([x, y])
+                self.bypass_theta = 0.0
+                self.bypass_v_x = 0.0
+                self.bypass_v_y = 0.0
+                self.t_prev = timestamp if timestamp is not None else 0.0
+                self.initialized = True
+            else:
+                # Update position directly from GPS
+                self.bypass_pos = np.array([x, y])
+            return
+
         # Initialize from first GPS measurement
         if not self.initialized:
             self.x[0, 0] = x  # px
@@ -205,6 +230,24 @@ class WagonLocalizer:
         if dt <= 0:
             return
 
+        # Bypass mode: simple dead reckoning integration
+        if self.bypass_mode:
+            # Integrate heading from gyro
+            self.bypass_theta += theta_dot * dt
+            # Normalize to [-π, π]
+            self.bypass_theta = math.atan2(math.sin(self.bypass_theta), math.cos(self.bypass_theta))
+
+            # Integrate velocity from accelerometer (in global frame)
+            # Convert body-frame acceleration to global frame
+            a_x_global = a_x_body * math.cos(self.bypass_theta) - a_y_body * math.sin(self.bypass_theta)
+            a_y_global = a_x_body * math.sin(self.bypass_theta) + a_y_body * math.cos(self.bypass_theta)
+
+            self.bypass_v_x += a_x_global * dt
+            self.bypass_v_y += a_y_global * dt
+
+            # Note: Position comes from GPS only in bypass mode
+            return
+
         # Extract current state
         px, py, theta, v, b_g = self.x.flatten()
 
@@ -219,23 +262,19 @@ class WagonLocalizer:
         a_long = a_x_body
 
         # Nonlinear state propagation: x_{k+1} = f(x_k, u_k)
-        # Normalize theta BEFORE propagation to ensure continuity
-        theta = math.atan2(math.sin(theta), math.cos(theta))
-
         theta_new = theta + omega * dt
         v_new = v + a_long * dt
         px_new = px + v * math.cos(theta) * dt
         py_new = py + v * math.sin(theta) * dt
         b_g_new = b_g  # Bias modeled as random walk
 
-        # Normalize theta_new to [-π, π] immediately after update
-        theta_new = math.atan2(math.sin(theta_new), math.cos(theta_new))
-
         # Update state vector
         self.x = np.array([[px_new], [py_new], [theta_new], [v_new], [b_g_new]])
 
+        # Normalize heading to [-π, π]
+        self.x[2, 0] = math.atan2(math.sin(self.x[2, 0]), math.cos(self.x[2, 0]))
+
         # Compute Jacobian F = ∂f/∂x (linearization for covariance propagation)
-        # Use normalized theta for Jacobian to match the state update
         F = np.eye(5)
 
         # ∂px_new/∂theta = -v * sin(theta) * dt
@@ -274,6 +313,16 @@ class WagonLocalizer:
         to global frame velocities (v_x, v_y) for compatibility with existing
         control system.
         """
+        # Bypass mode: return simple dead reckoning state
+        if self.bypass_mode:
+            return {
+                "x": float(self.bypass_pos[0]),
+                "y": float(self.bypass_pos[1]),
+                "theta": float(self.bypass_theta),
+                "v_x": float(self.bypass_v_x),
+                "v_y": float(self.bypass_v_y),
+            }
+
         px, py, theta, v, b_g = self.x.flatten()
 
         # Convert body-frame forward velocity to global frame components

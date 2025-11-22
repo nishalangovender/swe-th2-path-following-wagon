@@ -50,6 +50,7 @@ from wagon_control.config import (
     # WebSocket configuration
     WS_URI,
 )
+from wagon_control.component_modes import ComponentMode, parse_component_flags
 from wagon_control.data_collector import DataCollector
 from wagon_control.follower import PurePursuitFollower
 from wagon_control.localizer import WagonLocalizer
@@ -125,12 +126,13 @@ class WagonController:
         should_stop: Flag indicating whether to stop control loop.
     """
 
-    def __init__(self, uri: str, output_dir: str = ".") -> None:
+    def __init__(self, uri: str, output_dir: str = ".", component_mode: Optional[ComponentMode] = None) -> None:
         """Initialize the wagon controller.
 
         Args:
             uri: WebSocket URI to connect to (must start with ws:// or wss://).
             output_dir: Base directory for output files (default: current directory).
+            component_mode: ComponentMode configuration for component isolation testing.
 
         Raises:
             ValueError: If URI format is invalid.
@@ -142,16 +144,29 @@ class WagonController:
         self.uri: str = uri
         self.should_stop: bool = False
 
+        # Store component mode configuration
+        if component_mode is None:
+            component_mode = ComponentMode()  # Default: all components enabled
+        self.component_mode = component_mode
+
+        # Log active component configuration
+        logging.info(f"{TERM_BLUE}Component Configuration: {component_mode}{TERM_RESET}")
+
         # Initialize data collector
         self.data_collector = DataCollector(output_dir=output_dir)
 
-        # Initialize control system components (using config parameters)
-        self.localizer = WagonLocalizer(velocity_correction_gain=LOCALIZER_VELOCITY_CORRECTION_GAIN)
+        # Initialize control system components (using config parameters + component modes)
+        self.localizer = WagonLocalizer(
+            velocity_correction_gain=LOCALIZER_VELOCITY_CORRECTION_GAIN,
+            bypass_mode=not component_mode.use_ekf
+        )
         self.follower = PurePursuitFollower(
             lookahead_distance=FOLLOWER_BASE_LOOKAHEAD,
             lookahead_time=FOLLOWER_LOOKAHEAD_TIME,
             k_temporal=FOLLOWER_K_TEMPORAL,
             max_temporal_adjustment=FOLLOWER_MAX_TEMPORAL_ADJUSTMENT,
+            bypass_mode=not component_mode.use_pure_pursuit,
+            disable_temporal=not component_mode.use_temporal_feedback,
         )
         self.motor_controller = MotorController(
             k_v=MOTOR_KP_V,
@@ -164,6 +179,10 @@ class WagonController:
             k_f_omega=MOTOR_KF_OMEGA,
             velocity_compensation=MOTOR_VELOCITY_COMPENSATION,
             omega_compensation=MOTOR_OMEGA_COMPENSATION,
+            bypass_mode=not component_mode.use_pid,
+            disable_feedforward=not component_mode.use_feedforward,
+            disable_integral=not component_mode.use_integral,
+            disable_derivative=not component_mode.use_derivative,
         )
 
         # Latest sensor readings (for IMU integration)
@@ -564,14 +583,17 @@ class WagonController:
         self.data_collector.cleanup()
 
 
-async def main() -> None:
+async def main(component_mode: Optional[ComponentMode] = None) -> None:
     """Main entry point for the WebSocket client.
 
     Creates a WagonController instance, sets up signal handlers for graceful
     shutdown, and starts the control loop.
+
+    Args:
+        component_mode: ComponentMode configuration for component isolation testing.
     """
     # Create controller and use as context manager for automatic cleanup
-    with WagonController(WS_URI) as controller:
+    with WagonController(WS_URI, component_mode=component_mode) as controller:
         # Setup signal handlers for graceful shutdown
         loop = asyncio.get_event_loop()
 
@@ -588,20 +610,23 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    # Parse command-line arguments
+    # Parse component isolation flags first
+    component_mode, remaining_args = parse_component_flags()
+
+    # Parse remaining command-line arguments
     parser = argparse.ArgumentParser(
         description="WebSocket client for wagon control and sensor data collection"
     )
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose logging with timestamps"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(remaining_args)
 
     # Setup logging based on verbose flag
     setup_logging(args.verbose)
 
     try:
-        asyncio.run(main())
+        asyncio.run(main(component_mode=component_mode))
     except KeyboardInterrupt:
         logging.info("\nExiting...")
         sys.exit(0)

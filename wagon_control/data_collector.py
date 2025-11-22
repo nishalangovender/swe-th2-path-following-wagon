@@ -72,6 +72,8 @@ class DataCollector:
         self.ekf_csv_writer: Any = None
         self.tracking_csv_file: Optional[TextIO] = None
         self.tracking_csv_writer: Any = None
+        self.component_errors_csv_file: Optional[TextIO] = None
+        self.component_errors_csv_writer: Any = None
 
         # Determine run directory
         if run_dir:
@@ -97,6 +99,7 @@ class DataCollector:
         self.motor_output_path: Path = self.run_dir / "motor_data.csv"
         self.ekf_output_path: Path = self.run_dir / "ekf_diagnostics.csv"
         self.tracking_output_path: Path = self.run_dir / "tracking_metrics.csv"
+        self.component_errors_output_path: Path = self.run_dir / "component_errors.csv"
         self.score_output_path: Path = self.run_dir / "score.txt"
 
     def setup(self) -> None:
@@ -185,6 +188,20 @@ class DataCollector:
             ]
         )
         self.tracking_csv_file.flush()
+
+        # Setup component errors CSV file (individual component performance metrics)
+        self.component_errors_csv_file = open(self.component_errors_output_path, "w", newline="")
+        self.component_errors_csv_writer = csv.writer(self.component_errors_csv_file)
+        self.component_errors_csv_writer.writerow(
+            [
+                "timestamp",
+                "path_cross_track_error",
+                "path_along_track_error",
+                "velocity_tracking_error_v",
+                "velocity_tracking_error_omega",
+            ]
+        )
+        self.component_errors_csv_file.flush()
 
         print(
             f"{TERM_BLUE}✓ Initialized data collection to results/{self.run_dir.name}/{TERM_RESET}"
@@ -350,6 +367,29 @@ class DataCollector:
         if self.tracking_csv_file:
             self.tracking_csv_file.flush()
 
+    def log_component_errors(
+        self,
+        timestamp: float,
+        cross_track_error: float,
+        along_track_error: float,
+        velocity_error_v: float,
+        velocity_error_omega: float,
+    ) -> None:
+        """Log component-specific error metrics to CSV.
+
+        Args:
+            timestamp: Current time (seconds).
+            cross_track_error: Perpendicular distance from path (meters).
+            along_track_error: Distance along path from reference (meters).
+            velocity_error_v: Linear velocity tracking error (m/s).
+            velocity_error_omega: Angular velocity tracking error (rad/s).
+        """
+        self.component_errors_csv_writer.writerow(
+            [timestamp, cross_track_error, along_track_error, velocity_error_v, velocity_error_omega]
+        )
+        if self.component_errors_csv_file:
+            self.component_errors_csv_file.flush()
+
     def log_final_score(self, score: float) -> None:
         """Log final ground truth score to text file.
 
@@ -378,6 +418,8 @@ class DataCollector:
             self.ekf_csv_file.close()
         if self.tracking_csv_file:
             self.tracking_csv_file.close()
+        if self.component_errors_csv_file:
+            self.component_errors_csv_file.close()
 
         print(f"{TERM_BLUE}✓ Saved sensor data to results/{self.run_dir.name}/{TERM_RESET}")
 
